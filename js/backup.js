@@ -1,0 +1,583 @@
+/* backup.js — export/import JSON, auto-backup, undo restore, excel export
+   Phase 0 extract: no logic changes.
+*/
+// ---------- backup / restore ----------
+async function downloadFile(filename, blobParts, mime){
+  const blob = (blobParts instanceof Blob) ? blobParts : new Blob([blobParts], {type:mime});
+  // iOS Safari often just previews a blob link instead of saving it — the
+  // share sheet's "Save to Files" is the reliable path on iPhone.
+  try{
+    if(navigator.canShare){
+      const file = new File([blob], filename, {type:mime});
+      if(navigator.canShare({files:[file]})){
+        await navigator.share({files:[file], title:filename});
+        return;
+      }
+    }
+  }catch(e){
+    // user cancelled the share sheet, or share isn't available — fall back below
+  }
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.target = '_blank';
+  a.rel = 'noopener';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url), 4000);
+}
+
+/** کلید اسنپ‌شات Prospect قبل از Restore (داخل همان baqeriDB، جدا از CRM) */
+const PRERESTORE_PROSPECT_KEY = 'preRestoreProspect';
+
+/**
+ * دسترسی مستقیم به ProspectScoutDB (بدون وابستگی به لود بودن prospect-db.js)
+ * تا Backup از صفحه تنظیمات هم کار کند.
+ */
+function openProspectScoutDbForBackup(){
+  return new Promise((resolve, reject)=>{
+    try{
+      const req = indexedDB.open('ProspectScoutDB', 1);
+      req.onupgradeneeded = (e)=>{
+        const db = e.target.result;
+        if(!db.objectStoreNames.contains('shops')) db.createObjectStore('shops',{keyPath:'id'});
+        if(!db.objectStoreNames.contains('routes')) db.createObjectStore('routes',{keyPath:'id'});
+        if(!db.objectStoreNames.contains('meta')) db.createObjectStore('meta',{keyPath:'key'});
+      };
+      req.onsuccess = (e)=> resolve(e.target.result);
+      req.onerror = (e)=> reject(e.target.error);
+    }catch(e){ reject(e); }
+  });
+}
+function prospectBackupGetAll(db, storeName){
+  return new Promise((resolve, reject)=>{
+    const r = db.transaction(storeName, 'readonly').objectStore(storeName).getAll();
+    r.onsuccess = ()=> resolve(r.result||[]);
+    r.onerror = ()=> reject(r.error);
+  });
+}
+function prospectBackupGet(db, storeName, key){
+  return new Promise((resolve, reject)=>{
+    const r = db.transaction(storeName, 'readonly').objectStore(storeName).get(key);
+    r.onsuccess = ()=> resolve(r.result||null);
+    r.onerror = ()=> reject(r.error);
+  });
+}
+function prospectBackupPut(db, storeName, value){
+  return new Promise((resolve, reject)=>{
+    const r = db.transaction(storeName, 'readwrite').objectStore(storeName).put(value);
+    r.onsuccess = ()=> resolve(value);
+    r.onerror = ()=> reject(r.error);
+  });
+}
+function prospectBackupDelete(db, storeName, key){
+  return new Promise((resolve, reject)=>{
+    const r = db.transaction(storeName, 'readwrite').objectStore(storeName).delete(key);
+    r.onsuccess = ()=> resolve(true);
+    r.onerror = ()=> reject(r.error);
+  });
+}
+
+/** خواندن بسته‌ی Prospect برای Backup — در صورت نبود DB یا خطا null */
+async function exportProspectScoutBundle(){
+  try{
+    const db = await openProspectScoutDbForBackup();
+    const shops = await prospectBackupGetAll(db, 'shops');
+    const routes = await prospectBackupGetAll(db, 'routes');
+    const dtRec = await prospectBackupGet(db, 'meta', 'dailyTarget');
+    try{ db.close(); }catch(e){}
+    return {
+      version: 1,
+      shops: shops || [],
+      routes: routes || [],
+      dailyTarget: (dtRec && dtRec.value) ? dtRec.value : null,
+    };
+  }catch(e){
+    console.error('exportProspectScoutBundle failed', e);
+    return null;
+  }
+}
+
+/**
+ * FIX 1 (audit P1): تمام delete/put مربوط به restore ProspectScout را در یک
+ * IndexedDB readwrite transaction واحد (روی هر سه store: shops/routes/meta)
+ * انجام می‌دهد. shops/routes با clear()+put() جایگزین کامل می‌شوند (همان اثر
+ * نهایی delete-all-then-put-all قبلی، اما atomic)؛ meta فقط با یک put هدفمند
+ * روی کلید dailyTarget دست می‌خورد و سایر کلیدهای meta دست‌نخورده می‌مانند —
+ * دقیقاً همان رفتار قبلی. اگر هر request داخل این تراکنش خطا بدهد، خود
+ * IndexedDB کل تراکنش را abort می‌کند و هیچ تغییری commit نمی‌شود، پس داده‌ی
+ * قبلی Prospect دست‌نخورده باقی می‌ماند (all-or-nothing).
+ */
+function runProspectRestoreTx(db, bundle){
+  return new Promise((resolve, reject)=>{
+    let settled = false;
+    const finish = (ok, err)=>{
+      if(settled) return;
+      settled = true;
+      if(ok) resolve(true); else reject(err || new Error('prospect restore transaction failed'));
+    };
+    try{
+      const tx = db.transaction(['shops','routes','meta'], 'readwrite');
+      tx.oncomplete = ()=> finish(true);
+      tx.onerror = (e)=> finish(false, (e && e.target && e.target.error) || tx.error);
+      tx.onabort = ()=> finish(false, tx.error);
+
+      const shopsStore = tx.objectStore('shops');
+      const routesStore = tx.objectStore('routes');
+      const metaStore = tx.objectStore('meta');
+
+      shopsStore.clear();
+      (bundle.shops||[]).forEach(s=> shopsStore.put(s));
+
+      routesStore.clear();
+      (bundle.routes||[]).forEach(r=> routesStore.put(r));
+
+      if(bundle.dailyTarget != null){
+        metaStore.put({key:'dailyTarget', value: bundle.dailyTarget});
+      }
+      // یک request ناموفق در این تراکنش (preventDefault نشده) به‌صورت خودکار
+      // کل تراکنش را abort می‌کند؛ finish از طریق onerror/onabort صدا زده می‌شود.
+    }catch(e){
+      finish(false, e);
+    }
+  });
+}
+
+/** جایگزینی کامل داده‌ی Prospect از bundle بکاپ — فقط وقتی bundle معتبر است */
+async function restoreProspectScoutBundle(bundle){
+  if(!bundle || typeof bundle !== 'object') return false;
+  if(!Array.isArray(bundle.shops) && !Array.isArray(bundle.routes) && bundle.dailyTarget == null) return false;
+  let db = null;
+  try{
+    db = await openProspectScoutDbForBackup();
+    await runProspectRestoreTx(db, bundle);
+    return true;
+  }catch(e){
+    console.error('restoreProspectScoutBundle failed', e);
+    return false;
+  }finally{
+    if(db){ try{ db.close(); }catch(e){} }
+  }
+}
+
+
+// ---------- Intelligence backup / restore ----------
+// Intelligence keeps its own IndexedDB database and localStorage mirrors.
+// The CRM backup therefore carries a point-in-time snapshot of all three
+// Intelligence stores. Restore uses one readwrite transaction inside the
+// Intelligence DB, and the caller keeps a CRM + Intelligence pre-restore
+// snapshot so a failure in either phase can be compensated by rollback.
+const INTELLIGENCE_DB_NAME = 'bagheri_intelligence_db';
+const INTELLIGENCE_DB_VERSION = 3;
+const INTELLIGENCE_STORE_NAMES = ['occurrences', 'baseline_cache', 'seller_feedback'];
+const INTELLIGENCE_LS_KEYS = {
+  occurrences: 'bagheri_intelligence_occurrences',
+  baseline_cache: 'bagheri_intelligence_baseline_cache',
+  seller_feedback: 'bagheri_intelligence_seller_feedback'
+};
+
+function openIntelligenceDbForBackup(){
+  return new Promise((resolve, reject)=>{
+    try{
+      const req = indexedDB.open(INTELLIGENCE_DB_NAME, INTELLIGENCE_DB_VERSION);
+      req.onupgradeneeded = (e)=>{
+        const db = e.target.result;
+        if(!db.objectStoreNames.contains('occurrences')) db.createObjectStore('occurrences',{keyPath:'key'});
+        if(!db.objectStoreNames.contains('baseline_cache')) db.createObjectStore('baseline_cache',{keyPath:'key'});
+        if(!db.objectStoreNames.contains('seller_feedback')) db.createObjectStore('seller_feedback',{keyPath:'id'});
+      };
+      req.onsuccess = (e)=>resolve(e.target.result);
+      req.onerror = (e)=>reject(e.target.error || new Error('Intelligence DB open failed'));
+    }catch(e){ reject(e); }
+  });
+}
+
+function intelligenceGetAll(db, storeName){
+  return new Promise((resolve,reject)=>{
+    try{
+      const req = db.transaction(storeName,'readonly').objectStore(storeName).getAll();
+      req.onsuccess = ()=>resolve(req.result || []);
+      req.onerror = (e)=>reject(e.target.error || new Error('Intelligence read failed'));
+    }catch(e){ reject(e); }
+  });
+}
+
+async function exportIntelligenceState(){
+  const out = {version: INTELLIGENCE_DB_VERSION, occurrences: [], baseline_cache: [], seller_feedback: []};
+  let localOk = false;
+  // Intelligence modules synchronously update these mirrors before their async
+  // IndexedDB writes. Prefer them when present so an immediately-created DB
+  // cannot accidentally overwrite a fresher in-memory/localStorage snapshot.
+  try{
+    const rawOcc = localStorage.getItem(INTELLIGENCE_LS_KEYS.occurrences);
+    const rawBase = localStorage.getItem(INTELLIGENCE_LS_KEYS.baseline_cache);
+    const rawFb = localStorage.getItem(INTELLIGENCE_LS_KEYS.seller_feedback);
+    if(rawOcc != null || rawBase != null || rawFb != null){
+      const occ = rawOcc ? JSON.parse(rawOcc) : {};
+      const base = rawBase ? JSON.parse(rawBase) : {};
+      const fb = rawFb ? JSON.parse(rawFb) : [];
+      if(occ && typeof occ === 'object') Object.keys(occ).forEach(k=>out.occurrences.push({key:k,dates:Array.isArray(occ[k])?occ[k]:[]}));
+      if(base && typeof base === 'object') Object.keys(base).forEach(k=>{ if(base[k]) out.baseline_cache.push(base[k]); });
+      if(Array.isArray(fb)) out.seller_feedback = fb;
+      localOk = true;
+    }
+  }catch(e){ /* fall through to IndexedDB */ }
+  if(localOk) return out;
+
+  try{
+    const db = await openIntelligenceDbForBackup();
+    const [occ, base, fb] = await Promise.all(INTELLIGENCE_STORE_NAMES.map(n=>intelligenceGetAll(db,n)));
+    try{ db.close(); }catch(e){}
+    out.occurrences = occ;
+    out.baseline_cache = base;
+    out.seller_feedback = fb;
+  }catch(e){
+    // Optional Intelligence state must not make a legacy/empty CRM backup fail.
+  }
+  return out;
+}
+
+function restoreIntelligenceState(state){
+  return new Promise(async (resolve,reject)=>{
+    if(!state || typeof state !== 'object') return resolve(false);
+    let db = null;
+    try{
+      db = await openIntelligenceDbForBackup();
+      const tx = db.transaction(INTELLIGENCE_STORE_NAMES,'readwrite');
+      tx.oncomplete = ()=>{
+        try{
+          const occMap = {};
+          (state.occurrences||[]).forEach(r=>{ if(r && r.key) occMap[r.key]=Array.isArray(r.dates)?r.dates:[]; });
+          const baseMap = {};
+          (state.baseline_cache||[]).forEach(r=>{ if(r && r.key) baseMap[r.key]=r; });
+          localStorage.setItem(INTELLIGENCE_LS_KEYS.occurrences, JSON.stringify(occMap));
+          localStorage.setItem(INTELLIGENCE_LS_KEYS.baseline_cache, JSON.stringify(baseMap));
+          localStorage.setItem(INTELLIGENCE_LS_KEYS.seller_feedback, JSON.stringify(Array.isArray(state.seller_feedback)?state.seller_feedback:[]));
+          try{ db.close(); }catch(e){}
+          resolve(true);
+        }catch(e){ try{db.close();}catch(_e){} reject(e); }
+      };
+      tx.onerror = (e)=>{ try{db.close();}catch(_e){} reject(e.target.error || tx.error || new Error('Intelligence restore failed')); };
+      tx.onabort = ()=>{ try{db.close();}catch(_e){} reject(tx.error || new Error('Intelligence restore aborted')); };
+      INTELLIGENCE_STORE_NAMES.forEach(name=>tx.objectStore(name).clear());
+      (state.occurrences||[]).forEach(r=>tx.objectStore('occurrences').put(r));
+      (state.baseline_cache||[]).forEach(r=>tx.objectStore('baseline_cache').put(r));
+      (state.seller_feedback||[]).forEach(r=>tx.objectStore('seller_feedback').put(r));
+    }catch(e){ if(db){try{db.close();}catch(_e){}} reject(e); }
+  });
+}
+
+// ---------- Full-system snapshot helpers ----------
+// The CRM, Intelligence, Game Center and Sales Target live in different
+// persistence locations. A single composite snapshot keeps Undo Restore from
+// silently reverting only the CRM while leaving derived/business state behind.
+const PRERESTORE_SYSTEM_KEY = 'preRestoreSystemSnapshot';
+
+async function exportGameState(){
+  const cfg = (typeof GAME_CONFIG!=='undefined' && GAME_CONFIG && GAME_CONFIG.storage) ? GAME_CONFIG.storage : {metaKey:'gameMeta',ledgerKey:'gameLedger'};
+  const meta = await _backupDbValue(cfg.metaKey);
+  const ledger = await _backupDbValue(cfg.ledgerKey);
+  return { meta: meta && typeof meta==='object' ? meta : null, ledger: Array.isArray(ledger) ? ledger : null };
+}
+
+async function _backupDbValue(key){
+  try{
+    const row = await dbGet(key);
+    return row && Object.prototype.hasOwnProperty.call(row,'value') ? row.value : row;
+  }catch(e){ return null; }
+}
+
+async function exportSalesTargetState(){
+  try{
+    if(typeof hydrateMonthlySalesTarget==='function') await hydrateMonthlySalesTarget();
+  }catch(e){}
+  let value = null;
+  try{
+    const raw = localStorage.getItem('baqeri_sales_target_v1');
+    if(raw !== null) value = Math.max(0, Number(raw)||0);
+  }catch(e){}
+  if(value === null){
+    const dbValue = await _backupDbValue('salesTarget');
+    if(dbValue !== null && dbValue !== undefined) value = Math.max(0, Number(dbValue)||0);
+  }
+  return value;
+}
+
+async function restoreGameState(state){
+  const cfg = (typeof GAME_CONFIG!=='undefined' && GAME_CONFIG.storage) ? GAME_CONFIG.storage : {metaKey:'gameMeta',ledgerKey:'gameLedger'};
+  const meta = state && state.meta && typeof state.meta==='object' ? state.meta : null;
+  const ledger = state && Array.isArray(state.ledger) ? state.ledger : [];
+  await dbPut(cfg.metaKey, meta || {schemaVersion:1,lastActiveDate:null,currentStreak:0,bestStreak:0,monthlyTargetClaimedFor:null,dailyQuestTargets:null,createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()});
+  await dbPut(cfg.ledgerKey, ledger);
+}
+
+async function restoreSalesTargetState(value){
+  const target = Math.max(0, Number(value)||0);
+  try{ localStorage.setItem('baqeri_sales_target_v1', String(target)); }catch(e){}
+  if(typeof dbPut==='function') await dbPut('salesTarget', target);
+  try{ if(typeof _monthlySalesTargetCache!=='undefined') _monthlySalesTargetCache = target; }catch(e){}
+  return target;
+}
+
+async function clearIntelligenceState(){
+  return restoreIntelligenceState({version:INTELLIGENCE_DB_VERSION,occurrences:[],baseline_cache:[],seller_feedback:[]});
+}
+
+async function exportSystemStateSnapshot(){
+  const prospect = await exportProspectScoutBundle();
+  return {
+    version: 1,
+    crm: JSON.parse(JSON.stringify(data)),
+    intelligenceState: await exportIntelligenceState(),
+    prospectScout: prospect,
+    gameState: await exportGameState(),
+    salesTarget: await exportSalesTargetState()
+  };
+}
+
+async function capturePreRestoreSystemSnapshot(){
+  const snap = await exportSystemStateSnapshot();
+  await dbPut(PRERESTORE_KEY, JSON.stringify(snap.crm)); // legacy UI/compatibility
+  await dbPut(PRERESTORE_SYSTEM_KEY, JSON.stringify(snap));
+  return snap;
+}
+
+async function exportBackupJSON(){
+  const stamp = todayISO();
+  // سازگاری: همان فیلدهای data در ریشه؛ prospectScout اختیاری و اضافه
+  const payload = JSON.parse(JSON.stringify(data));
+  const prospect = await exportProspectScoutBundle();
+  if(prospect) payload.prospectScout = prospect;
+  // Intelligence state is part of the backup contract from this version on.
+  payload.intelligenceState = await exportIntelligenceState();
+  payload.gameState = await exportGameState();
+  payload.salesTarget = await exportSalesTargetState();
+  await downloadFile(`baqeri-backup-${stamp}.json`, JSON.stringify(payload, null, 2), 'application/json');
+  showToast('فایل بکاپ آماده شد');
+}
+
+function validateBackupShape(parsed){
+  if(!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return false;
+  const arrays = ['products','customers','invoices','payments','checks','suppliers'];
+  // FIX (independent audit, round 2): require ALL six known arrays to be
+  // present — not just "at least one" (previous FIX 2) or "undefined is ok"
+  // (original code). Every real backup produced by this app — old or new —
+  // always includes all six as arrays (even empty ones), because emptyData()
+  // and normalizeData() always populate them before export. So a real backup
+  // still passes, while a JSON missing a whole section (e.g. no "invoices"
+  // key at all) is now correctly rejected instead of silently wiping that
+  // section to [] on restore.
+  return arrays.every(k => Array.isArray(parsed[k]));
+}
+
+async function importBackupJSON(file){
+  try{
+    const text = await file.text();
+    const parsed = JSON.parse(text);
+    if(!validateBackupShape(parsed)){
+      showToast('این فایل، فایل بکاپ معتبری نیست');
+      return;
+    }
+    // Full-system safety snapshot: CRM + Intelligence + Prospect + Game + Target.
+    const previousIntelligenceState = await exportIntelligenceState();
+    const previousGameState = await exportGameState();
+    const previousSalesTarget = await exportSalesTargetState();
+    await capturePreRestoreSystemSnapshot();
+
+    // FIX 4: keep the previous in-memory data so a failed save doesn't leave
+    // the app running on an unsaved/half-applied dataset.
+    const previousData = data;
+    data = normalizeData(parsed);
+    try{
+      await saveData();
+      if(parsed.intelligenceState){
+        await restoreIntelligenceState(parsed.intelligenceState);
+      }else{
+        // Legacy backup has no Intelligence context; never retain signals tied
+        // to the pre-restore dataset. Invalidate deterministically.
+        await clearIntelligenceState();
+      }
+      await restoreGameState(parsed.gameState);
+      await restoreSalesTargetState(parsed.salesTarget);
+    }catch(restoreErr){
+      data = previousData;
+      try{ await saveData(); }catch(rollbackCrmErr){ console.error('CRM restore rollback failed', rollbackCrmErr); }
+      try{ await restoreIntelligenceState(previousIntelligenceState); }catch(rollbackIntelErr){ console.error('Intelligence restore rollback failed', rollbackIntelErr); }
+      try{ await restoreGameState(previousGameState); }catch(rollbackGameErr){ console.error('Game restore rollback failed', rollbackGameErr); }
+      try{ await restoreSalesTargetState(previousSalesTarget); }catch(rollbackTargetErr){ console.error('Sales target rollback failed', rollbackTargetErr); }
+      throw restoreErr;
+    }
+    // فقط اگر بکاپ جدید شامل prospectScout باشد جایگزین می‌شود؛ بکاپ قدیمی Prospect فعلی را دست نمی‌زند
+    if(parsed.prospectScout){
+      await restoreProspectScoutBundle(parsed.prospectScout);
+    }
+    render();
+    showToast('اطلاعات با موفقیت بازیابی شد');
+  }catch(e){
+    console.error(e);
+    showToast('فایل بکاپ معتبر نیست یا خراب است');
+  }
+}
+
+async function undoLastRestore(){
+  try{
+    const sysSnap = await dbGet(PRERESTORE_SYSTEM_KEY);
+    if(sysSnap && sysSnap.value){
+      const snap = JSON.parse(sysSnap.value);
+      if(!snap || !snap.crm) throw new Error('invalid pre-restore system snapshot');
+
+      const rollback = await exportSystemStateSnapshot();
+      const previousData = data;
+      try{
+        data = normalizeData(snap.crm);
+        await saveData();
+        await restoreIntelligenceState(snap.intelligenceState || {version:INTELLIGENCE_DB_VERSION,occurrences:[],baseline_cache:[],seller_feedback:[]});
+        await restoreGameState(snap.gameState);
+        await restoreSalesTargetState(snap.salesTarget);
+        if(snap.prospectScout) await restoreProspectScoutBundle(snap.prospectScout);
+      }catch(undoErr){
+        data = previousData;
+        try{ await saveData(); }catch(e){ console.error('Undo CRM rollback failed', e); }
+        try{ await restoreIntelligenceState(rollback.intelligenceState); }catch(e){ console.error('Undo Intelligence rollback failed', e); }
+        try{ await restoreGameState(rollback.gameState); }catch(e){ console.error('Undo Game rollback failed', e); }
+        try{ await restoreSalesTargetState(rollback.salesTarget); }catch(e){ console.error('Undo target rollback failed', e); }
+        if(rollback.prospectScout) { try{ await restoreProspectScoutBundle(rollback.prospectScout); }catch(e){ console.error('Undo Prospect rollback failed', e); } }
+        throw undoErr;
+      }
+      try{ await dbDelete(PRERESTORE_SYSTEM_KEY); }catch(e){ console.error('system snapshot cleanup failed', e); }
+      try{ await dbDelete(PRERESTORE_KEY); }catch(e){ console.error('legacy snapshot cleanup failed', e); }
+      try{ await dbDelete(PRERESTORE_PROSPECT_KEY); }catch(e){}
+      render();
+      showToast('به حالت قبل از بازیابی برگشت');
+      return;
+    }
+
+    // Backward compatibility with a pre-fix CRM-only snapshot.
+    const snap = await dbGet(PRERESTORE_KEY);
+    if(!snap || !snap.value){ showToast('نسخه‌ی قبل از بازیابی موجود نیست'); return; }
+    const previousData = data;
+    data = normalizeData(JSON.parse(snap.value));
+    try{ await saveData(); }catch(saveErr){ data = previousData; throw saveErr; }
+    try{ await dbDelete(PRERESTORE_KEY); }catch(e){ console.error('pre-restore snapshot cleanup failed', e); }
+    render();
+    showToast('به حالت قبل از بازیابی برگشت');
+  }catch(e){
+    console.error(e);
+    showToast('بازگرداندن ممکن نشد');
+  }
+}
+
+// ---------- بکاپ خودکار ساده (fire-and-forget، هیچ‌وقت نباید جلوی ذخیره‌ی اصلی را بگیرد) ----------
+async function getAutoBackupList(){
+  const rec = await dbGet(AUTO_BACKUP_LIST_KEY);
+  return (rec && rec.value) ? JSON.parse(rec.value) : [];
+}
+
+async function autoBackupTick(){
+  const list = await getAutoBackupList();
+  const last = list.length ? list[list.length-1].ts : 0;
+  if(Date.now() - last < AUTO_BACKUP_INTERVAL_MS) return; // هنوز زوده، لازم نیست نسخه‌ی جدید بگیریم
+  const ts = Date.now();
+  const key = AUTO_BACKUP_PREFIX + ts;
+  const autoPayload = JSON.parse(JSON.stringify(data));
+  autoPayload.intelligenceState = await exportIntelligenceState();
+  autoPayload.gameState = await exportGameState();
+  autoPayload.salesTarget = await exportSalesTargetState();
+  await dbPut(key, JSON.stringify(autoPayload));
+  list.push({key, ts});
+  while(list.length > AUTO_BACKUP_MAX){
+    const old = list.shift();
+    try{ await dbDelete(old.key); }catch(e){ /* نبود یا حذف نشد، مهم نیست */ }
+  }
+  await dbPut(AUTO_BACKUP_LIST_KEY, JSON.stringify(list));
+}
+
+async function restoreFromAutoBackup(key){
+  if(!confirm('مطمئنی؟ اطلاعات فعلی با این نسخه‌ی بکاپ خودکار جایگزین می‌شه.')) return;
+  try{
+    const snap = await dbGet(key);
+    if(!snap || !snap.value){ showToast('این نسخه‌ی بکاپ پیدا نشد'); return; }
+    // مثل بازیابی از فایل: قبل از جایگزینی، کل وضعیت سیستم هم نگه داشته می‌شود.
+    const previousIntelligenceState = await exportIntelligenceState();
+    const previousGameState = await exportGameState();
+    const previousSalesTarget = await exportSalesTargetState();
+    await capturePreRestoreSystemSnapshot();
+    // FIX 4: keep the previous in-memory data so a failed save doesn't leave
+    // the app running on an unsaved/half-applied dataset.
+    const previousData = data;
+    const autoParsed = JSON.parse(snap.value);
+    data = normalizeData(autoParsed);
+    try{
+      await saveData();
+      if(autoParsed.intelligenceState) await restoreIntelligenceState(autoParsed.intelligenceState);
+      else await clearIntelligenceState();
+      await restoreGameState(autoParsed.gameState);
+      await restoreSalesTargetState(autoParsed.salesTarget);
+    }catch(saveErr){
+      data = previousData;
+      try{ await saveData(); }catch(rollbackCrmErr){ console.error('CRM auto-backup rollback failed', rollbackCrmErr); }
+      try{ await restoreIntelligenceState(previousIntelligenceState); }catch(rollbackIntelErr){ console.error('Intelligence auto-backup rollback failed', rollbackIntelErr); }
+      try{ await restoreGameState(previousGameState); }catch(rollbackGameErr){ console.error('Game auto-backup rollback failed', rollbackGameErr); }
+      try{ await restoreSalesTargetState(previousSalesTarget); }catch(rollbackTargetErr){ console.error('Target auto-backup rollback failed', rollbackTargetErr); }
+      throw saveErr;
+    }
+    render();
+    showToast('از بکاپ خودکار بازیابی شد');
+  }catch(e){
+    console.error(e);
+    showToast('بازیابی از بکاپ خودکار ممکن نشد');
+  }
+}
+
+function exportExcel(){
+  if(typeof XLSX === 'undefined'){
+    showToast('کتابخانه اکسل لود نشد؛ برای این خروجی به اینترنت نیاز است');
+    return;
+  }
+  const wb = XLSX.utils.book_new();
+
+  const custRows = data.customers.map(c=>{
+    const t = customerTotals(c.id);
+    return {
+      'نام فروشگاه': c.name, 'صاحب فروشگاه': c.ownerName||'', 'شماره تماس': c.phone||'',
+      'منطقه': c.region||'', 'مسیر': c.route||'',
+      'جمع فاکتورها': t.invTotal, 'مانده حساب': t.balance,
+    };
+  });
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(custRows.length?custRows:[{'نام فروشگاه':''}]), 'مشتریان');
+
+  const invRows = [];
+  data.invoices.forEach(i=>{
+    const cust = data.customers.find(c=>c.id===i.customerId);
+    i.items.forEach(it=>{
+      invRows.push({
+        'شماره فاکتور': i.number||'', 'تاریخ': i.date, 'مشتری': cust?cust.name:'',
+        'کالا': it.name, 'تعداد': it.qty, 'قیمت واحد': it.price, 'جمع': it.qty*it.price - (it.discount||0),
+      });
+    });
+  });
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(invRows.length?invRows:[{'شماره فاکتور':''}]), 'فاکتورها');
+
+  const prodRows = data.products.map(p=>({
+    'نام کالا': p.name, 'دسته‌بندی': p.category||'', 'قیمت خرید (FIFO)': Math.round(productFifoUnitCost(p.id)),
+    'قیمت خرید (مبنای پیش‌فرض)': p.buy,
+    'قیمت عمده': p.wholesale, 'قیمت مصرف‌کننده': p.retail, 'موجودی': p.stockQty,
+    'ارزش ریالی موجودی (FIFO)': Math.round(productInventoryValue(p.id)),
+  }));
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(prodRows.length?prodRows:[{'نام کالا':''}]), 'کالاها');
+
+  const supRows = data.suppliers.map(s=>{
+    const t = supplierTotals(s.id);
+    return { 'تامین‌کننده': s.name, 'جمع خرید': t.purchaseTotal, 'جمع پرداخت': t.payTotal, 'بدهی': t.balance };
+  });
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(supRows.length?supRows:[{'تامین‌کننده':''}]), 'تامین‌کننده‌ها');
+
+  const wbArray = XLSX.write(wb, {bookType:'xlsx', type:'array'});
+  const blob = new Blob([wbArray], {type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+  downloadFile(`baqeri-report-${todayISO()}.xlsx`, blob).then(()=>{
+    showToast('فایل اکسل آماده شد');
+  });
+}
+
