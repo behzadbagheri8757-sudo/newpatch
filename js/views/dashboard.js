@@ -234,85 +234,152 @@
     });
   }
 
-  /* --- Watch / Early Warning aggregation (frozen spec §16) ---
-     Read-only aggregation over extractWatchObservations() for active
-     customers only. Never enters calculateAllActions(). No action
-     buttons. Limits: max 2 per customer, max 2 per productId, max 5
-     total. Sort: level desc, then deviationStrength desc. */
+  /* --- Watch / Early Warning + Lifecycle (additive) ---
+     Generation still comes from extractWatchObservations via
+     reconcileWatchLifecycle. Limits for dashboard preview:
+     max 2 per customer, max 2 per productId, max 5 rows.
+     Summary bar shows active + unreviewed counts. */
   var DASH_WATCH_LEVEL_RANK = { low: 1, medium: 2, high: 3 };
   function _dashWatchSort(a, b) {
     var la = DASH_WATCH_LEVEL_RANK[a.level] || 0;
     var lb = DASH_WATCH_LEVEL_RANK[b.level] || 0;
     if (lb !== la) return lb - la;
+    // Unreviewed first
+    var ar = a.reviewed ? 1 : 0;
+    var br = b.reviewed ? 1 : 0;
+    if (ar !== br) return ar - br;
     return (b.deviationStrength || 0) - (a.deviationStrength || 0);
   }
 
   function collectDashboardWatches() {
     var pool = [];
-    if (typeof extractWatchObservations !== 'function') return pool;
     if (typeof data === 'undefined' || !Array.isArray(data.customers)) return pool;
-    var customers = data.customers.filter(function (c) { return c && c.active !== false; });
 
-    for (var i = 0; i < customers.length; i++) {
-      var c = customers[i];
-      var watches;
-      try { watches = extractWatchObservations(c.id) || []; } catch (e) { watches = []; }
-      if (!watches.length) continue;
-      watches.sort(_dashWatchSort);
-      var capped = watches.slice(0, 2); // max 2 Watch per customer
-      for (var j = 0; j < capped.length; j++) {
-        var w = capped[j];
+    // Prefer lifecycle active occurrences (after reconcile)
+    var occs = [];
+    if (typeof getActiveWatchOccurrences === 'function') {
+      try { occs = getActiveWatchOccurrences() || []; } catch (eOcc) { occs = []; }
+    }
+
+    if (occs.length) {
+      var nameById = Object.create(null);
+      (data.customers || []).forEach(function (c) {
+        if (c && c.id) nameById[c.id] = c.name || '—';
+      });
+      for (var i = 0; i < occs.length; i++) {
+        var o = occs[i];
+        if (!o) continue;
         pool.push({
-          customerId: c.id,
-          customerName: c.name || '—',
-          productId: w.productId,
-          productName: w.productName,
-          category: w.category,
-          level: w.level,
-          reason: w.reason,
-          deviationStrength: w.deviationStrength
+          occurrenceId: o.id,
+          customerId: o.customerId,
+          customerName: nameById[o.customerId] || '—',
+          productId: o.productId,
+          productName: o.productName || null,
+          category: o.watchCategory,
+          level: o.level,
+          reason: o.generatedReason,
+          reviewed: !!(o.reason),
+          deviationStrength: 0
         });
+      }
+    } else if (typeof extractWatchObservations === 'function') {
+      // Fallback when lifecycle module not loaded
+      var customers = data.customers.filter(function (c) { return c && c.active !== false; });
+      for (var ci = 0; ci < customers.length; ci++) {
+        var c = customers[ci];
+        var watches;
+        try { watches = extractWatchObservations(c.id) || []; } catch (e) { watches = []; }
+        for (var j = 0; j < watches.length; j++) {
+          var w = watches[j];
+          pool.push({
+            occurrenceId: null,
+            customerId: c.id,
+            customerName: c.name || '—',
+            productId: w.productId,
+            productName: w.productName,
+            category: w.category,
+            level: w.level,
+            reason: w.reason,
+            reviewed: false,
+            deviationStrength: w.deviationStrength
+          });
+        }
       }
     }
 
     pool.sort(_dashWatchSort);
 
+    // Cap: max 2 per customer, max 2 per productId, max 5 total
+    var custCounts = Object.create(null);
     var productCounts = Object.create(null);
     var out = [];
     for (var k = 0; k < pool.length; k++) {
       var item = pool[k];
+      var cc = custCounts[item.customerId] || 0;
+      if (cc >= 2) continue;
       if (item.productId) {
-        var cnt = productCounts[item.productId] || 0;
-        if (cnt >= 2) continue; // max 2 Watch per productId
-        productCounts[item.productId] = cnt + 1;
+        var pc = productCounts[item.productId] || 0;
+        if (pc >= 2) continue;
+        productCounts[item.productId] = pc + 1;
       }
+      custCounts[item.customerId] = cc + 1;
       out.push(item);
-      if (out.length >= 5) break; // max 5 total
+      if (out.length >= 5) break;
     }
     return out;
   }
 
   function earlyWarningHtml() {
+    var summary = { active: 0, unreviewed: 0 };
+    if (typeof getWatchLifecycleSummary === 'function') {
+      try { summary = getWatchLifecycleSummary() || summary; } catch (eS) {}
+    }
     var items = [];
     try { items = collectDashboardWatches(); } catch (e) { items = []; }
-    if (!items.length) return '';
+
+    // If no active watches and summary is empty, hide block
+    if (!items.length && !(summary.active > 0)) return '';
+
     function levelColor(level) {
       return level === 'high' ? '#B3261E' : level === 'medium' ? '#C77700' : '#6B7280';
     }
     function levelLabel(level) {
       return level === 'high' ? 'زیاد' : level === 'medium' ? 'متوسط' : 'کم';
     }
+
+    var summaryBar =
+      '<div class="dash-watch-summary" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px;font-size:.82rem;">' +
+        '<span style="font-weight:700;color:var(--ink);">هشدار فعال: ' + (summary.active || items.length) + '</span>' +
+        (summary.unreviewed > 0
+          ? '<span style="color:#C77700;font-weight:600;">بررسی‌نشده: ' + summary.unreviewed + '</span>'
+          : '<span style="color:var(--ink-soft);">همه بررسی شده</span>') +
+      '</div>';
+
     var rows = items.map(function (w) {
       var sub = (w.productName ? ('«' + esc(w.productName) + '» — ') : '') + esc(w.reason || '');
       var href = '#/customer?id=' + encodeURIComponent(w.customerId || '');
+      var badge = w.reviewed
+        ? '<span style="font-size:.72rem;color:var(--olive-dark);font-weight:600;">بررسی شده</span>'
+        : '<span style="font-size:.72rem;color:#C77700;font-weight:600;">بررسی نشده</span>';
       return '<a class="ledger-row" href="' + href + '">' +
         '<span class="name">' + esc(w.customerName) + '<span class="sub">' + sub + '</span></span>' +
         '<span class="filler"></span>' +
-        '<span class="amount" style="color:' + levelColor(w.level) + ';font-size:.8rem;font-weight:600;">' + esc(levelLabel(w.level)) + '</span>' +
+        '<span class="amount" style="text-align:left;">' +
+          badge +
+          '<div style="color:' + levelColor(w.level) + ';font-size:.78rem;font-weight:600;">' + esc(levelLabel(w.level)) + '</div>' +
+        '</span>' +
         '</a>';
     }).join('');
+
+    var moreNote = (summary.active > items.length)
+      ? '<div class="report-note" style="margin-top:8px;">نمایش ' + items.length + ' از ' + summary.active + ' هشدار — جزئیات در صفحه مشتری</div>'
+      : '';
+
     return '<div class="dashboard-block">' + dashSectionHead(ICO.actions, 'هشدار زودهنگام (Watch)', '', '') +
-      '<div class="dash-activity">' + rows + '</div></div>';
+      summaryBar +
+      '<div class="dash-activity">' + (rows || '<div class="empty" style="padding:12px 8px;text-align:center;">هشدار فعالی نیست</div>') + '</div>' +
+      moreNote +
+      '</div>';
   }
 
   function recentInvoicesHtml() {
@@ -450,6 +517,10 @@
   }
 
   async function renderInto(root, isStale) {
+    // Lifecycle reconcile before painting Watch summary (additive; fail-open)
+    if (typeof reconcileWatchLifecycle === 'function') {
+      try { await reconcileWatchLifecycle(); } catch (eRec) { console.warn('watch lifecycle reconcile failed', eRec); }
+    }
     const metrics = typeof commandCenterMetrics === 'function' ? commandCenterMetrics(new Date()) : { mtdSales: globalTotals().monthSales, mtdProfit: 0, salesDeltaPct: null, profitDeltaPct: null };
     const g = globalTotals();
     const invVal = inventoryValue();

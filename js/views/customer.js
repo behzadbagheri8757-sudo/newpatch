@@ -110,19 +110,40 @@
      explicitly reported interpretation, not a silent guess. No action
      buttons are added for either list. */
   function intelligenceWatchHtml(cid) {
-    if (typeof extractCustomerSignals !== 'function' && typeof extractWatchObservations !== 'function') return '';
+    if (typeof extractCustomerSignals !== 'function' && typeof extractWatchObservations !== 'function' && typeof getActiveWatchOccurrences !== 'function') return '';
 
     var confirmed = [];
     if (typeof extractCustomerSignals === 'function') {
       try { confirmed = extractCustomerSignals(cid) || []; } catch (e) { confirmed = []; }
     }
-    var watches = [];
-    if (typeof extractWatchObservations === 'function') {
-      try { watches = extractWatchObservations(cid, confirmed) || []; } catch (e2) { watches = []; }
-    }
     var activeConfirmed = confirmed.filter(function (s) { return s && s.status === 'active'; });
 
-    if (!watches.length && !activeConfirmed.length) return '';
+    // Lifecycle occurrences (preferred) — already reconciled by caller when possible
+    var occs = [];
+    if (typeof getActiveWatchOccurrences === 'function') {
+      try { occs = getActiveWatchOccurrences(cid) || []; } catch (eOcc) { occs = []; }
+    }
+    // Fallback to raw generation if lifecycle absent
+    if (!occs.length && typeof extractWatchObservations === 'function') {
+      try {
+        var raw = extractWatchObservations(cid, confirmed) || [];
+        occs = raw.map(function (w, idx) {
+          return {
+            id: null,
+            customerId: cid,
+            productId: w.productId,
+            productName: w.productName,
+            watchCategory: w.category,
+            level: w.level,
+            generatedReason: w.reason,
+            reason: null,
+            status: 'active'
+          };
+        });
+      } catch (e2) { occs = []; }
+    }
+
+    if (!occs.length && !activeConfirmed.length) return '';
 
     function levelColor(level) {
       return level === 'critical' ? '#8E1F13' : level === 'high' ? '#B3261E' : level === 'medium' ? '#C77700' : '#6B7280';
@@ -146,20 +167,99 @@
     }
 
     var watchHtml = '';
-    if (watches.length) {
-      var wrows = watches.map(function (w) {
-        var label = (w.productName ? ('«' + esc(w.productName) + '» — ') : '') + esc(w.reason || '');
-        return '<div style="font-size:.85rem;line-height:1.9;display:flex;justify-content:space-between;gap:8px;">' +
-          '<span>• ' + label + '</span>' +
-          '<span style="color:' + levelColor(w.level) + ';font-weight:600;white-space:nowrap;">' + esc(levelLabel(w.level)) + '</span>' +
-          '</div>';
+    if (occs.length) {
+      var wrows = occs.map(function (o) {
+        var label = (o.productName ? ('«' + esc(o.productName) + '» — ') : '') + esc(o.generatedReason || '');
+        var reviewed = !!(o.reason);
+        var badge = reviewed
+          ? '<span style="color:var(--olive-dark);font-weight:600;font-size:.78rem;">بررسی شده</span>'
+          : '<span style="color:#C77700;font-weight:600;font-size:.78rem;">بررسی نشده</span>';
+        var reasonBit = '';
+        if (reviewed && o.reason) {
+          var rlabel = (typeof watchReasonLabel === 'function') ? watchReasonLabel(o.reason.code) : (o.reason.code || '');
+          reasonBit = '<div style="font-size:.78rem;color:var(--ink-soft);margin-top:2px;">علت: ' + esc(rlabel) +
+            (o.reason.comment ? (' — ' + esc(o.reason.comment)) : '') + '</div>';
+        }
+        var clickable = o.id
+          ? (' data-watch-occ="' + esc(o.id) + '" role="button" tabindex="0" style="cursor:pointer;"')
+          : '';
+        return '<div class="watch-occ-row"' + clickable + ' style="font-size:.85rem;line-height:1.7;padding:8px 0;border-bottom:1px dotted var(--line);">' +
+          '<div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start;">' +
+            '<span>• ' + label + '</span>' +
+            '<span style="text-align:left;white-space:nowrap;">' + badge +
+              '<div style="color:' + levelColor(o.level) + ';font-weight:600;font-size:.78rem;">' + esc(levelLabel(o.level)) + '</div>' +
+            '</span>' +
+          '</div>' + reasonBit +
+        '</div>';
       }).join('');
-      watchHtml = '<div class="card wide" style="margin-bottom:10px;">' +
+      watchHtml = '<div class="card wide" style="margin-bottom:10px;" id="watch-lifecycle-card">' +
         '<div class="label">هشدار زودهنگام (WATCH / EARLY WARNING)</div>' +
+        '<div class="report-note" style="margin:4px 0 8px;">برای ثبت علت، روی هشدار بزنید. ثبت علت، هشدار را حذف نمی‌کند.</div>' +
         '<div style="margin-top:6px;">' + wrows + '</div></div>';
     }
 
     return confirmedHtml + watchHtml;
+  }
+
+  function openWatchReasonSheet(occurrenceId, onDone) {
+    if (!occurrenceId || typeof recordWatchReason !== 'function') return;
+    var options = (typeof WATCH_REASON_OPTIONS !== 'undefined' && Array.isArray(WATCH_REASON_OPTIONS))
+      ? WATCH_REASON_OPTIONS
+      : [
+          { code: 'still_stock', label: 'موجودی مشتری هنوز کافی است' },
+          { code: 'price', label: 'قیمت' },
+          { code: 'competitor', label: 'خرید از رقیب' },
+          { code: 'no_need', label: 'فعلاً نیاز ندارد' },
+          { code: 'quality', label: 'مشکل کیفیت' },
+          { code: 'other', label: 'سایر' }
+        ];
+    var optsHtml = options.map(function (o) {
+      return '<button type="button" class="btn secondary small" data-watch-reason="' + esc(o.code) + '" style="width:100%;margin-bottom:6px;text-align:right;">' +
+        esc(o.label) + '</button>';
+    }).join('');
+    if (typeof openSheet !== 'function') return;
+    openSheet(
+      '<div class="sheet-title">ثبت علت هشدار</div>' +
+      '<div class="report-note" style="margin-bottom:10px;">علت فقط مشاهده است و هشدار را حل‌شده نمی‌کند.</div>' +
+      '<div id="watch-reason-list">' + optsHtml + '</div>' +
+      '<div class="field" style="margin-top:10px;"><label>یادداشت (اختیاری)</label>' +
+      '<input type="text" id="watch-reason-note" autocomplete="off" placeholder="توضیح کوتاه..."></div>' +
+      '<div class="btn-row" style="margin-top:12px;justify-content:flex-end;">' +
+      '<button type="button" class="btn secondary" id="watch-reason-cancel">انصراف</button></div>'
+    );
+    var cancel = document.getElementById('watch-reason-cancel');
+    if (cancel) cancel.onclick = function () { if (typeof closeModal === 'function') closeModal(); };
+    var list = document.getElementById('watch-reason-list');
+    if (list) {
+      list.addEventListener('click', function (e) {
+        var btn = e.target.closest('[data-watch-reason]');
+        if (!btn) return;
+        var code = btn.getAttribute('data-watch-reason');
+        var noteEl = document.getElementById('watch-reason-note');
+        var note = noteEl ? noteEl.value : '';
+        try {
+          recordWatchReason(occurrenceId, code, note);
+          if (typeof showToast === 'function') showToast('علت ثبت شد');
+        } catch (err) {
+          console.error(err);
+          if (typeof showToast === 'function') showToast('ثبت علت ممکن نشد');
+        }
+        if (typeof closeModal === 'function') closeModal();
+        if (typeof onDone === 'function') onDone();
+      });
+    }
+  }
+
+  function bindWatchLifecycleRows(root) {
+    if (!root) return;
+    root.querySelectorAll('[data-watch-occ]').forEach(function (el) {
+      el.addEventListener('click', function () {
+        var id = el.getAttribute('data-watch-occ');
+        openWatchReasonSheet(id, function () {
+          if (typeof drawCustomerPage === 'function') drawCustomerPage(rootEl || root);
+        });
+      });
+    });
   }
 
   function drawCustomerPage(root) {
@@ -628,6 +728,7 @@
         if (typeof printCustomerStatement === 'function') printCustomerStatement(c.id);
       };
     }
+    bindWatchLifecycleRows(root);
   }
 
   function mount(root, params) {
@@ -639,10 +740,16 @@
     if (nav) nav.style.display = '';
 
     currentCustomerId = params && params.id ? params.id : null;
-    // Register the view refresh callback for mutation-driven UI updates.
-drawCustomerPage(root);
-
-    refreshToken = ViewHost.setRefresh(()=>drawCustomerPage(rootEl));
+    function refreshCustomer() {
+      function paint() { drawCustomerPage(rootEl || root); }
+      if (typeof reconcileWatchLifecycle === 'function' && currentCustomerId) {
+        reconcileWatchLifecycle(currentCustomerId).then(paint).catch(function () { paint(); });
+      } else {
+        paint();
+      }
+    }
+    refreshCustomer();
+    refreshToken = ViewHost.setRefresh(refreshCustomer);
 
     return function unmount() {
       ViewHost.clearRefresh(refreshToken);
