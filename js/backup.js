@@ -346,6 +346,27 @@ async function exportBackupJSON(){
 }
 
 function _isPlainObject(v){ return !!v && typeof v === 'object' && !Array.isArray(v); }
+
+/**
+ * Compatibility normalization for older backup envelopes.
+ * Mutates parsed in place so validate + restore see the current contract.
+ * Does not invent CRM financial data.
+ */
+function _normalizeBackupEnvelope(parsed){
+  if(!_isPlainObject(parsed)) return parsed;
+  // Older exports stored Intelligence under intelligenceState
+  if(parsed.intelligence == null && _isPlainObject(parsed.intelligenceState)){
+    parsed.intelligence = parsed.intelligenceState;
+  }
+  return parsed;
+}
+
+/** Inventory layer sources produced by stock.js + db.js (including migration). */
+const _LAYER_SOURCES = new Set([
+  'purchase','manual-in','manual-adjust','sale-return','sale-revert',
+  'legacy-opening','migration-gap'
+]);
+
 function _isFiniteNonNegative(v){ return Number.isFinite(Number(v)) && Number(v) >= 0; }
 function _isIsoDateOnly(v){
   if(typeof v !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(v)) return false;
@@ -383,13 +404,16 @@ function _validateProspectBundle(bundle, customerIds, locationIds, currentSchema
     }
   }
   for(const sh of bundle.shops){
-    const required=['name','routeId','neighborhoodId','locationId','status','createdAt','updatedAt','latestScore','latestRank','visits'];
+    // locationId is optional (legacy ProspectScout shops omit it; normalizeProspectShop defaults null)
+    const required=['name','routeId','neighborhoodId','status','createdAt','updatedAt','latestScore','latestRank','visits'];
     if(currentSchema>=3){ for(const k of required){ if(!(k in sh)) return false; } }
     if(typeof sh.name !== 'string') return false;
-    if(sh.routeId != null && !routeIds.has(String(sh.routeId))) return false;
+    // Orphan routeId/neighborhoodId allowed when routes[] is empty or missing that id
+    // (legacy exports kept shop FKs after routes were cleared). Enforce only when present.
+    if(sh.routeId != null && routeIds.size && !routeIds.has(String(sh.routeId))) return false;
     if(sh.neighborhoodId != null){
       const r=sh.routeId!=null ? bundle.routes.find(x=>String(x.id)===String(sh.routeId)) : null;
-      if(!r || !r.neighborhoods.some(n=>String(n.id)===String(sh.neighborhoodId))) return false;
+      if(r && !r.neighborhoods.some(n=>String(n.id)===String(sh.neighborhoodId))) return false;
     }
     if(sh.locationId != null && !locationIds.has(String(sh.locationId))) return false;
     if(sh.linkedCustomerId != null && !customerIds.has(String(sh.linkedCustomerId))) return false;
@@ -475,14 +499,16 @@ function _validateIntelligenceBundle(bundle, customerIds, productIds){
 
 function validateBackupShape(parsed){
   if(!_isPlainObject(parsed)) return false;
+  _normalizeBackupEnvelope(parsed);
   const arrays = ['products','customers','invoices','payments','checks','suppliers'];
   if(!arrays.every(k => Array.isArray(parsed[k]))) return false;
   const schema = Number(parsed.schemaVersion || 1);
   if(!Number.isInteger(schema) || schema<1 || schema>3) return false;
+  // schemaVersion 3 = CRM shape (inventoryLayers + location arrays).
+  // Envelope extras (settings / prospectScout / intelligence) are optional on
+  // older schema-3 files; validate when present.
   if(schema >= 3){
     if(!Array.isArray(parsed.inventoryLayers) || !Array.isArray(parsed.regions) || !Array.isArray(parsed.routes) || !Array.isArray(parsed.neighborhoods)) return false;
-    if(parsed.prospectScout == null || parsed.intelligence == null || !_isPlainObject(parsed.settings)) return false;
-    if(!Object.prototype.hasOwnProperty.call(parsed.settings,'monthlySalesTarget')) return false;
   }
   if(parsed.settings != null){
     if(!_isPlainObject(parsed.settings)) return false;
@@ -505,11 +531,15 @@ function validateBackupShape(parsed){
   if(schema>=3){
     const layerIds=new Set();
     for(const l of parsed.inventoryLayers){
-      if(!_isPlainObject(l) || l.id==null || layerIds.has(String(l.id)) || !productIds.has(String(l.productId)) || l.purchaseId==null) return false;
+      if(!_isPlainObject(l) || l.id==null || layerIds.has(String(l.id)) || !productIds.has(String(l.productId))) return false;
       layerIds.add(String(l.id));
+      const src = l.source != null ? String(l.source) : 'purchase';
+      if(!_LAYER_SOURCES.has(src)) return false;
+      // purchase layers must reference a purchase; orphan layers (sale-return,
+      // legacy-opening, manual-*, etc.) legitimately have purchaseId null
+      if(src === 'purchase' && (l.purchaseId==null || String(l.purchaseId)==='')) return false;
       if(!_isFiniteNonNegative(l.qtyOriginal) || !_isFiniteNonNegative(l.qtyRemaining) || Number(l.qtyRemaining)>Number(l.qtyOriginal) || !_isFiniteNonNegative(l.unitCost)) return false;
       if(l.status!=null && !['open','depleted','voided'].includes(String(l.status))) return false;
-      if(l.source!=null && !['purchase','manual-in','manual-adjust','sale-return','sale-revert'].includes(String(l.source))) return false;
       if(l.date!=null && !_isIsoDateOnly(String(l.date).slice(0,10))) return false;
     }
     if(!_uniqueIds(parsed.regions) || !_uniqueIds(parsed.routes) || !_uniqueIds(parsed.neighborhoods)) return false;
@@ -517,8 +547,8 @@ function validateBackupShape(parsed){
     for(const r of parsed.routes){ if(r.regionId==null || !regionIds.has(String(r.regionId))) return false; }
     for(const n of parsed.neighborhoods){ if(n.routeId==null || !routeIds.has(String(n.routeId))) return false; }
     for(const c of parsed.customers){ if(c.locationId!=null && !neighIds.has(String(c.locationId)) && !routeIds.has(String(c.locationId))) return false; }
-    if(!_validateProspectBundle(parsed.prospectScout, customerIds, new Set([...neighIds,...routeIds]), schema)) return false;
-    if(!_validateIntelligenceBundle(parsed.intelligence, customerIds, productIds)) return false;
+    if(parsed.prospectScout != null && !_validateProspectBundle(parsed.prospectScout, customerIds, new Set([...neighIds,...routeIds]), schema)) return false;
+    if(parsed.intelligence != null && !_validateIntelligenceBundle(parsed.intelligence, customerIds, productIds)) return false;
   } else {
     if(parsed.prospectScout!=null && !_validateProspectBundle(parsed.prospectScout, customerIds, new Set(), schema)) return false;
     if(parsed.intelligence!=null && !_validateIntelligenceBundle(parsed.intelligence, customerIds, productIds)) return false;
@@ -675,6 +705,7 @@ async function _restoreParsedBackup(parsed){
 async function importBackupJSON(file){
   try{
     const parsed=JSON.parse(await file.text());
+    _normalizeBackupEnvelope(parsed);
     if(!validateBackupShape(parsed)){ showToast('این فایل، فایل بکاپ معتبر یا کامل نیست'); return; }
     const ok=await _restoreParsedBackup(parsed);
     if(ok){ render(); showToast('اطلاعات با موفقیت بازیابی شد'); }
