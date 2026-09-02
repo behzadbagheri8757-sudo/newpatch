@@ -875,9 +875,20 @@ function invoiceReturnAvailableQty(invoice, productId){
   );
 }
 
+/* Phase 1 UX patch — method is chosen by a direct tap (chip) instead of a
+   dropdown, and the rest of the form only appears once a method is picked
+   (sequential one-tap feel). Same 5 methods, same stored values, same
+   return-flow logic as before — only the method-selection widget changed. */
+const TX_METHOD_CHIPS = [
+  { value:'cash', label:'نقدی' },
+  { value:'card', label:'کارت' },
+  { value:'transfer', label:'انتقال' },
+  { value:'discount', label:'تخفیف' },
+  { value:'return', label:'برگشت از فروش' },
+];
 function openAddTransaction(cid){
   // وضعیت فرم بین رندرهای مجدد شیت نگه داشته می‌شود.
-  let method = 'cash';
+  let method = '';
   let amountStr = '';
   let dateStr = todayISO();
   let noteStr = '';
@@ -974,32 +985,31 @@ function openAddTransaction(cid){
 
   function renderSheet(){
     openSheet(`
-      <h3>ثبت تراکنش جدید</h3>
-      <div class="field">
-        <label>نوع تراکنش</label>
-        <select id="f-method">
-          <option value="cash" ${method==='cash'?'selected':''}>دریافت نقدی</option>
-          <option value="card" ${method==='card'?'selected':''}>دریافت با کارت</option>
-          <option value="transfer" ${method==='transfer'?'selected':''}>انتقال بانکی</option>
-          <option value="discount" ${method==='discount'?'selected':''}>تخفیف (کاهش بدهی)</option>
-          <option value="return" ${method==='return'?'selected':''}>برگشت از فروش</option>
-        </select>
+      <h3>ثبت تراکنش</h3>
+      <div class="q-block">
+        <div class="q-title">روش پرداخت</div>
+        <div class="chip-wrap">${TX_METHOD_CHIPS.map(o=>`<button type="button" class="chip-opt${method===o.value?' selected':''}" data-tx-method="${esc(o.value)}">${esc(o.label)}</button>`).join('')}</div>
       </div>
-      <div class="field"><label>تاریخ</label>${shamsiDateInputHTML('f-date', dateStr)}</div>
-      <div class="field"><label>مبلغ (تومان)</label><input id="f-amount" type="text" inputmode="decimal" value="${amountStr}"></div>
-      <div class="field"><label>توضیح (اختیاری)</label><input id="f-note" value="${esc(noteStr)}"></div>
-      ${returnItemsSectionHtml()}
-      <div class="btn-row"><button class="btn" id="save-tx">ثبت</button></div>
+      ${method ? `
+        <div class="field"><label>تاریخ</label>${shamsiDateInputHTML('f-date', dateStr)}</div>
+        <div class="field"><label>مبلغ (تومان)</label><input id="f-amount" type="text" inputmode="decimal" value="${amountStr}"></div>
+        <div class="field"><label>توضیح (اختیاری)</label><input id="f-note" value="${esc(noteStr)}"></div>
+        ${returnItemsSectionHtml()}
+        <div class="btn-row"><button class="btn" id="save-tx">ثبت</button></div>
+      ` : ''}
     `);
 
-    document.getElementById('f-method').addEventListener('change', e=>{
-      method = e.target.value;
-      if(method!=='return'){
-        selectedInvoiceId = '';
-        returnRows = [];
-      }
-      renderSheet();
+    document.querySelectorAll('[data-tx-method]').forEach(btn=>{
+      btn.addEventListener('click', ()=>{
+        method = btn.getAttribute('data-tx-method');
+        if(method!=='return'){
+          selectedInvoiceId = '';
+          returnRows = [];
+        }
+        renderSheet();
+      });
     });
+    if(!method) return;
     document.getElementById('f-date').addEventListener('input', e=>{ dateStr = e.target.value; });
     document.getElementById('f-amount').addEventListener('input', e=>{ amountStr = e.target.value; });
     document.getElementById('f-note').addEventListener('input', e=>{ noteStr = e.target.value; });
@@ -1339,90 +1349,141 @@ function bindNoPurchasePrompt(cid){
   });
 }
 
+/* Phase 1 UX patch — sequential one-tap visit capture.
+   Same data model as before (VISIT_RESULTS/REASONS/NEXT_ACTIONS, visit.reason/
+   opportunity/threat/nextAction/tags/note): only the interaction changed.
+   Result → tap → the one relevant next question appears → tap → finish.
+   Opportunity/threat stay in the data model (still read by customer.js /
+   visits.js display code) but are no longer asked in this quick flow — they
+   are optional "observation" fields, not required for any calculation, so
+   dropping them from the fast path loses no business logic. */
 function openAddVisit(cid){
-  const reasonOpts = (typeof VISIT_REASONS !== 'undefined' ? VISIT_REASONS : []).map(r=>`<option value="${esc(r)}">${esc(r)}</option>`).join('');
-  const oppOpts = (typeof VISIT_OPPORTUNITIES !== 'undefined' ? VISIT_OPPORTUNITIES : []).map(r=>`<option value="${esc(r)}">${esc(r)}</option>`).join('');
-  const threatOpts = (typeof VISIT_THREATS !== 'undefined' ? VISIT_THREATS : []).map(r=>`<option value="${esc(r)}">${esc(r)}</option>`).join('');
-  const nextOpts = (typeof VISIT_NEXT_ACTIONS !== 'undefined' ? VISIT_NEXT_ACTIONS : []).map(r=>`<option value="${esc(r)}">${esc(r)}</option>`).join('');
   const nprCandidates = getNoPurchaseCandidates(cid, null, 3);
   const nprHtml = noPurchasePromptHtml(nprCandidates, 'visit', 'این مشتری معمولاً این محصول را می‌خرد — علت عدم خرید؟');
+
+  const RESULT_CHIPS = [
+    { value: VISIT_RESULTS[0], label: 'سفارش گرفته شد' },
+    { value: VISIT_RESULTS[1], label: 'سفارش گرفته نشد' },
+    { value: VISIT_RESULTS[2], label: 'بسته بود' },
+    { value: VISIT_RESULTS[3], label: 'سرکشی' },
+  ];
+  function chipBtn(group, value, label){
+    return `<button type="button" class="chip-opt" data-vgroup="${esc(group)}" data-value="${esc(value)}">${esc(label)}</button>`;
+  }
+
   openSheet(`
-    <h3>ثبت ویزیت مشتری</h3>
-    <div class="field"><label>تاریخ</label>${shamsiDateInputHTML('f-date', todayISO())}</div>
-    <div class="field"><label>ساعت</label><input id="f-time" type="time" value="${nowHHMM()}"></div>
-    <div class="field">
-      <label>نتیجه ویزیت</label>
-      <select id="f-result">${VISIT_RESULTS.map(r=>`<option value="${esc(r)}">${esc(r)}</option>`).join('')}</select>
+    <h3>ثبت ویزیت</h3>
+    <div style="display:flex;gap:8px;">
+      <div class="field" style="flex:1;"><label>تاریخ</label>${shamsiDateInputHTML('f-date', todayISO())}</div>
+      <div class="field" style="flex:1;"><label>ساعت</label><input id="f-time" type="time" value="${nowHHMM()}"></div>
     </div>
-    <div class="field"><label>یادداشت کوتاه (اختیاری)</label><input id="f-visit-note" placeholder="اختیاری" autocomplete="off"></div>
-    ${nprHtml}
-    <div class="btn-row" style="margin-bottom:8px;">
-      <button type="button" class="btn small secondary" id="toggle-visit-detail">جزئیات بیشتر</button>
+
+    <div class="q-block">
+      <div class="q-title">نتیجه ویزیت</div>
+      <div class="chip-wrap">${RESULT_CHIPS.map(o=>chipBtn('result', o.value, o.label)).join('')}</div>
     </div>
-    <div id="visit-detail-block" style="display:none;">
-      <div class="field"><label>دلیل (مشاهده)</label>
-        <select id="f-visit-reason"><option value="">—</option>${reasonOpts}</select>
-      </div>
-      <div class="field"><label>فرصت (مشاهده)</label>
-        <select id="f-visit-opportunity"><option value="">—</option>${oppOpts}</select>
-      </div>
-      <div class="field"><label>تهدید (مشاهده)</label>
-        <select id="f-visit-threat"><option value="">—</option>${threatOpts}</select>
-      </div>
-      <div class="field"><label>اقدام بعدی</label>
-        <select id="f-visit-next"><option value="">—</option>${nextOpts}</select>
-      </div>
-      <div class="field"><label>برچسب‌ها (اختیاری، با ویرگول جدا کنید)</label>
-        <input id="f-visit-tags" placeholder="مثال: قیمت‌حساس، رقیب‌فعال" autocomplete="off">
-      </div>
+
+    <div class="q-block" id="visit-q-reason" style="display:none;">
+      <div class="q-title">چرا سفارش نگرفت؟</div>
+      <div class="chip-wrap">${VISIT_REASONS.map(r=>chipBtn('reason', r, r)).join('')}</div>
     </div>
-    <div class="btn-row"><button class="btn" id="save-visit">ثبت ویزیت</button></div>
+
+    <div id="visit-npr-wrap" style="display:none;">${nprHtml}</div>
+
+    <div class="q-block" id="visit-q-next" style="display:none;">
+      <div class="q-title">اقدام بعدی؟</div>
+      <div class="chip-wrap">${VISIT_NEXT_ACTIONS.map(r=>chipBtn('next', r, r)).join('')}</div>
+    </div>
+
+    <div id="visit-final" style="display:none;">
+      <div class="field"><label>یادداشت کوتاه (اختیاری)</label><input id="f-visit-note" placeholder="اختیاری" autocomplete="off"></div>
+      <div class="field" id="visit-tags-field"><label>برچسب‌ها (اختیاری، با ویرگول جدا کنید)</label><input id="f-visit-tags" placeholder="مثال: قیمت‌حساس، رقیب‌فعال" autocomplete="off"></div>
+      <div class="btn-row"><button class="btn" id="save-visit">ثبت ویزیت</button></div>
+    </div>
   `);
   bindNoPurchasePrompt(cid);
-  const detailBtn = document.getElementById('toggle-visit-detail');
-  if(detailBtn){
-    detailBtn.addEventListener('click', ()=>{
-      const block = document.getElementById('visit-detail-block');
-      if(!block) return;
-      const open = block.style.display === 'none';
-      block.style.display = open ? 'block' : 'none';
-      detailBtn.textContent = open ? 'بستن جزئیات' : 'جزئیات بیشتر';
+
+  const state = { result: null, reason: null, nextAction: null };
+  const root = document.getElementById('modalRoot');
+  const qReason = document.getElementById('visit-q-reason');
+  const nprWrap = document.getElementById('visit-npr-wrap');
+  const qNext = document.getElementById('visit-q-next');
+  const final = document.getElementById('visit-final');
+  const tagsField = document.getElementById('visit-tags-field');
+
+  function selectChip(group, value){
+    root.querySelectorAll(`.chip-opt[data-vgroup="${group}"]`).forEach(btn=>{
+      btn.classList.toggle('selected', btn.getAttribute('data-value') === value);
     });
   }
+  function hide(el){ if(el) el.style.display = 'none'; }
+  function show(el, disp){ if(el) el.style.display = disp || 'block'; }
+
+  function showFinal(withTags){
+    tagsField.style.display = withTags ? '' : 'none';
+    show(final);
+  }
+
+  root.querySelectorAll('.chip-opt[data-vgroup="result"]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const value = btn.getAttribute('data-value');
+      state.result = value; state.reason = null; state.nextAction = null;
+      selectChip('result', value);
+      hide(qReason); hide(nprWrap); hide(qNext); hide(final);
+      if(value === VISIT_RESULTS[0]){ // سفارش گرفته شد
+        showFinal(true);
+      } else if(value === VISIT_RESULTS[1]){ // سفارش گرفته نشد
+        show(qReason);
+        if(nprCandidates.length) show(nprWrap);
+      } else if(value === VISIT_RESULTS[2]){ // فروشگاه بسته بود
+        showFinal(false);
+      } else { // فقط بازدید/سرکشی
+        showFinal(false);
+      }
+    });
+  });
+  root.querySelectorAll('.chip-opt[data-vgroup="reason"]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const value = btn.getAttribute('data-value');
+      state.reason = value; state.nextAction = null;
+      selectChip('reason', value);
+      hide(final);
+      show(qNext);
+    });
+  });
+  root.querySelectorAll('.chip-opt[data-vgroup="next"]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const value = btn.getAttribute('data-value');
+      state.nextAction = value;
+      selectChip('next', value);
+      showFinal(true);
+    });
+  });
+
   document.getElementById('save-visit').addEventListener('click', async (e)=>{
     await withSubmitGuard(e.currentTarget, async ()=>{
       const c = data.customers.find(x=>x.id===cid);
       if(!c){ showToast('مشتری پیدا نشد'); return; }
+      if(!state.result){ showToast('نتیجه ویزیت را انتخاب کنید'); return; }
       const date = document.getElementById('f-date').value || todayISO();
       const time = document.getElementById('f-time').value || nowHHMM();
-      const result = document.getElementById('f-result').value;
       const noteEl = document.getElementById('f-visit-note');
       const note = noteEl ? (noteEl.value || '').trim() : '';
-      const reasonEl = document.getElementById('f-visit-reason');
-      const oppEl = document.getElementById('f-visit-opportunity');
-      const threatEl = document.getElementById('f-visit-threat');
-      const nextEl = document.getElementById('f-visit-next');
       const tagsEl = document.getElementById('f-visit-tags');
-      const reason = reasonEl ? (reasonEl.value || '').trim() : '';
-      const opportunity = oppEl ? (oppEl.value || '').trim() : '';
-      const threat = threatEl ? (threatEl.value || '').trim() : '';
-      const nextAction = nextEl ? (nextEl.value || '').trim() : '';
       let tags = [];
-      if(tagsEl && tagsEl.value){
+      if(tagsField.style.display !== 'none' && tagsEl && tagsEl.value){
         tags = String(tagsEl.value).split(/[,،]/).map(t=>t.trim()).filter(Boolean);
       }
       const visit = {
         id: uid(),
         date,
         time,
-        result,
-        ordered: result === VISIT_RESULTS[0],
+        result: state.result,
+        ordered: state.result === VISIT_RESULTS[0],
       };
       if(note) visit.note = note;
-      if(reason) visit.reason = reason;
-      if(opportunity) visit.opportunity = opportunity;
-      if(threat) visit.threat = threat;
-      if(nextAction) visit.nextAction = nextAction;
+      if(state.reason) visit.reason = state.reason;
+      if(state.nextAction) visit.nextAction = state.nextAction;
       if(tags.length) visit.tags = tags;
       c.visits = c.visits || [];
       c.visits.push(visit);
