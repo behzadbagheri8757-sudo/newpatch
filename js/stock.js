@@ -373,7 +373,6 @@ function applyReturnStockEffects(returnItems, date, payment){
 
     // Explicit override (rare; UI does not set it)
     if(ri.unitCost!==undefined && ri.unitCost!==null && !isNaN(Number(ri.unitCost))){
-      ri.costAllocations = [{ qty: qty, unitCost: Number(ri.unitCost), cost: qty*Number(ri.unitCost) }];
       plans.push({ productId: ri.productId, qty, slices: [{ qty, unitCost: Number(ri.unitCost) }] });
       return;
     }
@@ -419,12 +418,6 @@ function applyReturnStockEffects(returnItems, date, payment){
           err.code = 'RETURN_ALLOC_SHORTFALL';
           throw err;
         }
-        // Persist the exact FIFO cost basis used for this return. Profit/reporting
-        // can then consume the same allocation instead of reconstructing a cost
-        // from buyPrice/product.buy.
-        ri.costAllocations = sliced.slices.map(function(sl){
-          return { qty: Number(sl.qty)||0, unitCost: Number(sl.unitCost)||0, cost: (Number(sl.qty)||0)*(Number(sl.unitCost)||0) };
-        });
         plans.push({ productId: ri.productId, qty, slices: sliced.slices });
       } else {
         // Legacy invoice without costAllocations — fallback buyPrice then product.buy
@@ -436,13 +429,11 @@ function applyReturnStockEffects(returnItems, date, payment){
           }
         }
         if(!(unitCost>0) && prod) unitCost = Number(prod.buy)||0;
-        ri.costAllocations = [{ qty: qty, unitCost: unitCost, cost: qty*unitCost }];
         plans.push({ productId: ri.productId, qty, slices: [{ qty, unitCost }] });
       }
     } else {
       // No invoiceId (account-only / defensive). Never guess from "last sale".
       const unitCost = prod ? (Number(prod.buy)||0) : 0;
-      ri.costAllocations = [{ qty: qty, unitCost: unitCost, cost: qty*unitCost }];
       plans.push({ productId: ri.productId, qty, slices: [{ qty, unitCost }] });
     }
   });

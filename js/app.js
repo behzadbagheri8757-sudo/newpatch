@@ -261,7 +261,7 @@ function renderBackup(main){
     </div>
 
     <h2 class="section-title">بکاپ‌های خودکار (داخل همین دستگاه)</h2>
-    <div class="empty" style="padding:0 0 8px;text-align:right;">هر حدود ۱۲ ساعت یک نسخه خودکار گرفته می‌شه و فقط ۵ نسخه‌ی آخر نگه داشته می‌شه. اینا جایگزین بکاپ دستی (بالا) نیستن، فقط یه شبکه‌ی ایمنی اضافه‌ن.</div>
+    <div class="empty" style="padding:0 0 8px;text-align:right;">هر حدود ۱۲ ساعت یک نسخه خودکار از داده‌های CRM، FIFO، هدف فروش، ProspectScout و Intelligence گرفته می‌شه و فقط ۵ نسخه‌ی آخر نگه داشته می‌شه. اینا جایگزین بکاپ دستی (بالا) نیستن، فقط یه شبکه‌ی ایمنی اضافه‌ن.</div>
     <div id="auto-backup-list"><div class="empty">در حال بارگذاری…</div></div>
   `;
   document.getElementById('export-json').addEventListener('click', exportBackupJSON);
@@ -1136,6 +1136,55 @@ function openAddTransaction(cid){
   renderSheet();
 }
 
+function openEditStandalonePayment(cid, paymentId){
+  const p = (data.payments||[]).find(x=>x.id===paymentId && x.customerId===cid);
+  if(!p || p.invoiceId || p.method==='return' || !['cash','card','transfer','discount'].includes(p.method)) return;
+  let method = p.method;
+  let dateStr = p.date || todayISO();
+  let amountStr = String(p.amount || '');
+  let noteStr = p.note || '';
+  openSheet(`
+    <h3>ویرایش دریافت</h3>
+    <div class="field"><label>نوع</label><select id="ep-method">
+      <option value="cash" ${method==='cash'?'selected':''}>دریافت نقدی</option>
+      <option value="card" ${method==='card'?'selected':''}>دریافت با کارت</option>
+      <option value="transfer" ${method==='transfer'?'selected':''}>انتقال بانکی</option>
+      <option value="discount" ${method==='discount'?'selected':''}>تخفیف</option>
+    </select></div>
+    <div class="field"><label>تاریخ</label>${shamsiDateInputHTML('ep-date', dateStr)}</div>
+    <div class="field"><label>مبلغ (تومان)</label><input id="ep-amount" type="text" inputmode="decimal" value="${esc(amountStr)}"></div>
+    <div class="field"><label>توضیح (اختیاری)</label><input id="ep-note" value="${esc(noteStr)}"></div>
+    <div class="btn-row"><button class="btn" id="ep-save">ذخیره</button><button class="btn danger secondary" id="ep-delete">حذف دریافت</button></div>
+  `);
+  document.getElementById('ep-method').addEventListener('change', e=>{ method=e.target.value; });
+  document.getElementById('ep-date').addEventListener('input', e=>{ dateStr=e.target.value; });
+  document.getElementById('ep-amount').addEventListener('input', e=>{ amountStr=e.target.value; });
+  document.getElementById('ep-note').addEventListener('input', e=>{ noteStr=e.target.value; });
+  document.getElementById('ep-save').addEventListener('click', async e=>{
+    await withSubmitGuard(e.currentTarget, async()=>{
+      const amount=numVal(document.getElementById('ep-amount'));
+      if(amount<=0){ showToast('مبلغ باید بیشتر از صفر باشد'); throw new Error('validation'); }
+      const previousData=JSON.parse(JSON.stringify(data));
+      try{
+        p.method=method; p.date=dateStr||todayISO(); p.amount=amount; p.note=(noteStr||'').trim();
+        await saveData();
+      }catch(err){ data=previousData; throw err; }
+      openCustomerDetail(cid); render(); showToast('دریافت ویرایش شد');
+    });
+  });
+  document.getElementById('ep-delete').addEventListener('click', async e=>{
+    await withSubmitGuard(e.currentTarget, async()=>{
+      if(!confirm('این دریافت از حساب مشتری حذف شود؟')) throw new Error('validation');
+      const previousData=JSON.parse(JSON.stringify(data));
+      try{
+        data.payments=data.payments.filter(x=>x.id!==paymentId);
+        await saveData();
+      }catch(err){ data=previousData; throw err; }
+      openCustomerDetail(cid); render(); showToast('دریافت حذف شد');
+    });
+  });
+}
+
 function openAddCheck(cid){
   openSheet(`
     <h3>ثبت چک جدید</h3>
@@ -1156,14 +1205,147 @@ function openAddCheck(cid){
   });
 }
 
+/* ============================================================
+   No-Purchase Reason (V1) — low-friction structured feedback
+   Uses existing P-03 recordFeedback. Never blocks save.
+   ============================================================ */
+var NO_PURCHASE_REASON_CATEGORIES = {
+  SKU_DELAY: true,
+  SKU_QUANTITY_DROP: true,
+  SKU_FREQUENCY_DROP: true,
+  LINE_DROP: true,
+  COMBINED_SKU_DETERIORATION: true,
+  KEY_PRODUCT_LOST: true
+};
+var NO_PURCHASE_REASON_OPTIONS = [
+  { code: 'still_stock', label: 'موجودی دارد' },
+  { code: 'competitor_bought', label: 'از رقیب خریده' },
+  { code: 'no_need', label: 'فعلاً نیاز ندارد' },
+  { code: 'price_issue', label: 'قیمت مناسب نیست' },
+  { code: 'liquidity', label: 'نقدینگی ندارد' }
+];
+
+/**
+ * Return up to `limit` high-confidence SKU signals that justify asking
+ * "why didn't they buy this product?". Filters pending / seasonally
+ * suppressed / already-answered / multi-product signals.
+ * excludeProductIds: optional Set/array of productIds already in the basket.
+ */
+function getNoPurchaseCandidates(cid, excludeProductIds, limit){
+  limit = (typeof limit === 'number' && limit > 0) ? limit : 3;
+  if(!cid || typeof extractCustomerSignals !== 'function') return [];
+  var exclude = Object.create(null);
+  if(excludeProductIds){
+    if(Array.isArray(excludeProductIds)){
+      excludeProductIds.forEach(function(id){ if(id) exclude[id] = true; });
+    }else if(typeof excludeProductIds === 'object'){
+      Object.keys(excludeProductIds).forEach(function(id){ if(id) exclude[id] = true; });
+    }
+  }
+  var signals = [];
+  try{ signals = extractCustomerSignals(cid) || []; }catch(e){ signals = []; }
+  var out = [];
+  for(var i = 0; i < signals.length; i++){
+    var s = signals[i];
+    if(!s || !s.category) continue;
+    if(!NO_PURCHASE_REASON_CATEGORIES[s.category]) continue;
+    if(s.status === 'pending') continue;
+    if(s.seasonallySuppressed === true) continue;
+    var pid = s.productId;
+    if(pid == null || pid === '' || pid === 'multi') continue;
+    if(exclude[pid]) continue;
+    if(s.feedback && s.feedback.reasonCode) continue;
+    out.push(s);
+  }
+  out.sort(function(a, b){
+    var pa = (typeof a.severityPoints === 'number') ? a.severityPoints : 0;
+    var pb = (typeof b.severityPoints === 'number') ? b.severityPoints : 0;
+    return pb - pa;
+  });
+  var seen = Object.create(null);
+  var unique = [];
+  for(var j = 0; j < out.length; j++){
+    var p = out[j].productId;
+    if(seen[p]) continue;
+    seen[p] = true;
+    unique.push(out[j]);
+    if(unique.length >= limit) break;
+  }
+  return unique;
+}
+
+function noPurchaseReasonChipsHtml(productId, category, source){
+  return NO_PURCHASE_REASON_OPTIONS.map(function(o){
+    return '<button type="button" class="chip-opt npr-chip" data-npr-pid="' + esc(String(productId)) +
+      '" data-npr-cat="' + esc(String(category)) +
+      '" data-npr-code="' + esc(o.code) +
+      '" data-npr-source="' + esc(source || '') +
+      '">' + esc(o.label) + '</button>';
+  }).join('');
+}
+
+function noPurchasePromptHtml(candidates, source, introText){
+  if(!candidates || !candidates.length) return '';
+  var blocks = candidates.map(function(s){
+    var name = s.productName || (typeof data !== 'undefined' && data.products
+      ? ((data.products.find(function(p){ return p && p.id === s.productId; }) || {}).name || s.productId)
+      : s.productId);
+    return '<div class="npr-product" style="margin:8px 0 4px;">' +
+      '<div style="font-weight:600;margin-bottom:4px;">' + esc(name) + '</div>' +
+      '<div class="chip-wrap">' + noPurchaseReasonChipsHtml(s.productId, s.category, source) + '</div>' +
+      '</div>';
+  }).join('');
+  return '<div class="npr-card" id="npr-card" style="border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin:10px 0 12px;background:var(--bg-elevated, transparent);">' +
+    '<div style="font-size:0.92rem;margin-bottom:4px;">' + esc(introText || 'این مشتری معمولاً این محصول را می‌خرد') + '</div>' +
+    blocks +
+    '<div class="btn-row" style="margin-top:6px;"><button type="button" class="btn small secondary" id="npr-dismiss">رد کردن</button></div>' +
+    '</div>';
+}
+
+function bindNoPurchasePrompt(cid){
+  var card = document.getElementById('npr-card');
+  if(!card) return;
+  var dismiss = document.getElementById('npr-dismiss');
+  if(dismiss){
+    dismiss.addEventListener('click', function(){
+      card.style.display = 'none';
+    });
+  }
+  card.querySelectorAll('.npr-chip').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      if(btn.disabled) return;
+      var pid = btn.getAttribute('data-npr-pid');
+      var cat = btn.getAttribute('data-npr-cat');
+      var code = btn.getAttribute('data-npr-code');
+      var source = btn.getAttribute('data-npr-source') || '';
+      if(!cid || !cat || !code) return;
+      if(typeof recordFeedback === 'function'){
+        try{
+          recordFeedback(cid, pid, cat, code, '', source || null);
+        }catch(e){
+          console.warn('recordFeedback failed', e);
+        }
+      }
+      var productBlock = btn.closest('.npr-product');
+      if(productBlock){
+        productBlock.querySelectorAll('.npr-chip').forEach(function(b){
+          b.disabled = true;
+          b.classList.remove('selected');
+        });
+        btn.classList.add('selected');
+      }
+      if(typeof showToast === 'function') showToast('ثبت شد');
+    });
+  });
+}
+
 function openAddVisit(cid){
-  const reasonCodeAnswers = {};
-  const reasonCodeCandidates = (typeof ReasonCodes!=='undefined') ? ReasonCodes.getMissingItemsForOrder(cid, todayISO()) : [];
-  reasonCodeCandidates.forEach(function(c){ ReasonCodes.markPromptShown(c,'visit_report'); });
   const reasonOpts = (typeof VISIT_REASONS !== 'undefined' ? VISIT_REASONS : []).map(r=>`<option value="${esc(r)}">${esc(r)}</option>`).join('');
   const oppOpts = (typeof VISIT_OPPORTUNITIES !== 'undefined' ? VISIT_OPPORTUNITIES : []).map(r=>`<option value="${esc(r)}">${esc(r)}</option>`).join('');
   const threatOpts = (typeof VISIT_THREATS !== 'undefined' ? VISIT_THREATS : []).map(r=>`<option value="${esc(r)}">${esc(r)}</option>`).join('');
   const nextOpts = (typeof VISIT_NEXT_ACTIONS !== 'undefined' ? VISIT_NEXT_ACTIONS : []).map(r=>`<option value="${esc(r)}">${esc(r)}</option>`).join('');
+  const nprCandidates = getNoPurchaseCandidates(cid, null, 3);
+  const nprHtml = noPurchasePromptHtml(nprCandidates, 'visit', 'این مشتری معمولاً این محصول را می‌خرد — علت عدم خرید؟');
   openSheet(`
     <h3>ثبت ویزیت مشتری</h3>
     <div class="field"><label>تاریخ</label>${shamsiDateInputHTML('f-date', todayISO())}</div>
@@ -1173,6 +1355,7 @@ function openAddVisit(cid){
       <select id="f-result">${VISIT_RESULTS.map(r=>`<option value="${esc(r)}">${esc(r)}</option>`).join('')}</select>
     </div>
     <div class="field"><label>یادداشت کوتاه (اختیاری)</label><input id="f-visit-note" placeholder="اختیاری" autocomplete="off"></div>
+    ${nprHtml}
     <div class="btn-row" style="margin-bottom:8px;">
       <button type="button" class="btn small secondary" id="toggle-visit-detail">جزئیات بیشتر</button>
     </div>
@@ -1193,9 +1376,9 @@ function openAddVisit(cid){
         <input id="f-visit-tags" placeholder="مثال: قیمت‌حساس، رقیب‌فعال" autocomplete="off">
       </div>
     </div>
-    ${typeof ReasonCodes!=='undefined' ? ReasonCodes.renderMissingItemsHtml(reasonCodeCandidates,'visit_report') : ''}
     <div class="btn-row"><button class="btn" id="save-visit">ثبت ویزیت</button></div>
   `);
+  bindNoPurchasePrompt(cid);
   const detailBtn = document.getElementById('toggle-visit-detail');
   if(detailBtn){
     detailBtn.addEventListener('click', ()=>{
@@ -1204,30 +1387,6 @@ function openAddVisit(cid){
       const open = block.style.display === 'none';
       block.style.display = open ? 'block' : 'none';
       detailBtn.textContent = open ? 'بستن جزئیات' : 'جزئیات بیشتر';
-    });
-  }
-  const visitReasonRoot=document.querySelector('.sheet');
-  if(visitReasonRoot){
-    visitReasonRoot.addEventListener('click',function(e){
-      const opt=e.target.closest('.reason-option'), dismiss=e.target.closest('.reason-dismiss'), card=e.target.closest('.reason-card');
-      if(!card) return;
-      const pid=card.getAttribute('data-reason-pid');
-      if(opt){
-        const code=opt.getAttribute('data-reason');
-        reasonCodeAnswers[pid]={reasonCode:code,otherText:''};
-        card.querySelectorAll('.reason-option').forEach(function(b){b.classList.toggle('active',b===opt);});
-        const other=card.querySelector('.reason-other'); if(other) other.hidden=code!=='other';
-      } else if(dismiss){
-        reasonCodeAnswers[pid]={reasonCode:'dismissed',otherText:''};
-        card.querySelectorAll('.reason-option,.reason-dismiss').forEach(function(b){b.classList.remove('active');});
-        dismiss.classList.add('active');
-      }
-    });
-    visitReasonRoot.addEventListener('input',function(e){
-      if(!e.target.matches('[data-reason-other]')) return;
-      const card=e.target.closest('.reason-card'); if(!card) return;
-      const pid=card.getAttribute('data-reason-pid');
-      if(reasonCodeAnswers[pid]) reasonCodeAnswers[pid].otherText=String(e.target.value||'').slice(0,50);
     });
   }
   document.getElementById('save-visit').addEventListener('click', async (e)=>{
@@ -1267,11 +1426,6 @@ function openAddVisit(cid){
       if(tags.length) visit.tags = tags;
       c.visits = c.visits || [];
       c.visits.push(visit);
-      Object.keys(reasonCodeAnswers).forEach(function(pid){
-        const a=reasonCodeAnswers[pid];
-        if(!a || !a.reasonCode || typeof ReasonCodes==='undefined') return;
-        ReasonCodes.recordReasonCode(cid,pid,a.reasonCode,a.otherText||'', 'visit_report', {visitId:visit.id});
-      });
       await saveData();
       // Game Center hook (derived only — never rolls back CRM)
       if (typeof gameOnCustomerVisit === 'function') {
@@ -1340,9 +1494,10 @@ function openCustomerDetail(cid){
     `).join('')}
 
     <h2 class="section-title">تراکنش‌ها</h2>
-    ${pays.length===0?`<div class="empty">تراکنشی ثبت نشده</div>`:pays.map(p=>`
-      <div class="ledger-row"><span class="name">${paymentMethodLabel(p.method)}${p.note?` <span class="sub" style="display:inline;">(${esc(p.note)})</span>`:''}</span><span class="filler"></span><span class="amount">${faDate(p.date)} — ${toman(p.amount)} ت</span></div>
-    `).join('')}
+    ${pays.length===0?`<div class="empty">تراکنشی ثبت نشده</div>`:pays.map(p=>{
+      const standalone = !p.invoiceId && p.method!=='return' && ['cash','card','transfer','discount'].includes(p.method);
+      return `<div class="ledger-row"><span class="name">${paymentMethodLabel(p.method)}${p.note?` <span class="sub" style="display:inline;">(${esc(p.note)})</span>`:''}</span><span class="filler"></span><span class="amount">${faDate(p.date)} — ${toman(p.amount)} ت${standalone?`<br><button class="btn secondary small" data-edit-standalone-payment="${esc(p.id)}">ویرایش</button><button class="btn danger small" data-delete-standalone-payment="${esc(p.id)}">حذف</button>`:''}</span></div>`;
+    }).join('')}
 
     <h2 class="section-title">چک‌ها</h2>
     ${checks.length===0?`<div class="empty">چکی ثبت نشده</div>`:checks.map(c2=>`
@@ -1375,6 +1530,21 @@ function openCustomerDetail(cid){
   });
   document.querySelectorAll('[data-open-invoice]').forEach(row=>{
     row.addEventListener('click', ()=>openInvoiceDetail(row.dataset.openInvoice, cid));
+  });
+  document.querySelectorAll('[data-edit-standalone-payment]').forEach(btn=>{
+    btn.addEventListener('click', ()=>openEditStandalonePayment(cid, btn.dataset.editStandalonePayment));
+  });
+  document.querySelectorAll('[data-delete-standalone-payment]').forEach(btn=>{
+    btn.addEventListener('click', async e=>{
+      await withSubmitGuard(e.currentTarget, async()=>{
+        const p=data.payments.find(x=>x.id===btn.dataset.deleteStandalonePayment && x.customerId===cid);
+        if(!p || p.invoiceId || p.method==='return') return;
+        if(!confirm('این دریافت از حساب مشتری حذف شود؟')) throw new Error('validation');
+        const previousData=JSON.parse(JSON.stringify(data));
+        try{ data.payments=data.payments.filter(x=>x.id!==p.id); await saveData(); }catch(err){ data=previousData; throw err; }
+        openCustomerDetail(cid); render(); showToast('دریافت حذف شد');
+      });
+    });
   });
   document.querySelectorAll('[data-toggle-check]').forEach(row=>{
     row.addEventListener('click', async ()=>{
@@ -1502,58 +1672,6 @@ function openInvoiceForm(cid, editInv){
   let discountType = (editInv && editInv.discountType==='percent') ? 'percent' : 'fixed';
   if(discountType==='percent') discount = Math.min(100, Math.max(0, discount));
 
-  // Reason Code state is local to this order form; it never changes invoice math.
-  const reasonAnswers = {};
-  const reasonShown = {};
-  function getOrderReasonCandidates(){
-    if(editInv || typeof ReasonCodes==='undefined') return [];
-    const selected = {};
-    rows.forEach(function(r){ if(r && r.productId) selected[r.productId]=true; });
-    return ReasonCodes.getMissingItemsForOrder(cid, document.getElementById('f-date') ? document.getElementById('f-date').value : todayISO())
-      .filter(function(x){ return !selected[x.productId]; });
-  }
-  function reasonCodesHtml(){
-    const candidates = getOrderReasonCandidates();
-    candidates.forEach(function(c){
-      if(!reasonShown[c.productId]){
-        reasonShown[c.productId]=true;
-        ReasonCodes.markPromptShown(c,'order_entry');
-      }
-    });
-    return typeof ReasonCodes!=='undefined' ? ReasonCodes.renderMissingItemsHtml(candidates,'order_entry') : '';
-  }
-  function bindReasonCodes(){
-    const root=document.querySelector('.sheet');
-    if(!root || root._reasonCodesBound) return;
-    root._reasonCodesBound=true;
-    root.addEventListener('click',function(e){
-      const opt=e.target.closest('.reason-option');
-      const dismiss=e.target.closest('.reason-dismiss');
-      const card=e.target.closest('.reason-card');
-      if(!card) return;
-      const pid=card.getAttribute('data-reason-pid');
-      if(opt){
-        const code=opt.getAttribute('data-reason');
-        reasonAnswers[pid]={reasonCode:code,otherText:''};
-        card.querySelectorAll('.reason-option').forEach(function(b){b.classList.toggle('active',b===opt);});
-        const other=card.querySelector('.reason-other');
-        if(other) other.hidden = code!=='other';
-        return;
-      }
-      if(dismiss){
-        reasonAnswers[pid]={reasonCode:'dismissed',otherText:''};
-        card.querySelectorAll('.reason-option,.reason-dismiss').forEach(function(b){b.classList.remove('active');});
-        dismiss.classList.add('active');
-      }
-    });
-    root.addEventListener('input',function(e){
-      if(!e.target.matches('[data-reason-other]')) return;
-      const card=e.target.closest('.reason-card'); if(!card) return;
-      const pid=card.getAttribute('data-reason-pid');
-      if(reasonAnswers[pid]) reasonAnswers[pid].otherText=String(e.target.value||'').slice(0,50);
-    });
-  }
-
   // "مانده قبلی": مانده مشتری بدون احتساب این فاکتور اصلاً — برای فاکتور جدید یعنی مانده فعلی،
   // برای ویرایش یعنی مانده فعلی منهای سهم همین فاکتور (چه از بابت جمع فاکتور و چه از بابت پرداختی‌های همراهش)
   const prevBalance = editInv
@@ -1594,7 +1712,7 @@ function openInvoiceForm(cid, editInv){
     return `
       <div class="inv-row-meta">
         <div class="inv-row-line-total">${esc(String(qty))} × ${toman(unitPrice)} = <strong>${toman(lineAmt)} ت</strong></div>
-        <div class="inv-row-profit-line" style="color:${profitColor};">سود تقریبی این قلم: ${profitTotal<0?'−':''}${toman(Math.abs(profitTotal))} ت (${pct}٪)</div>
+        <div class="inv-row-profit-line" style="color:${profitColor};">سود این قلم: ${profitTotal<0?'−':''}${toman(Math.abs(profitTotal))} ت (${pct}٪)</div>
         <button type="button" class="inv-price-info-btn" data-row="${idx}" aria-expanded="false">اطلاعات قیمت</button>
         <div class="inv-price-info-panel" data-row="${idx}" hidden>
           <div class="inv-price-info-grid">
@@ -1704,7 +1822,7 @@ function openInvoiceForm(cid, editInv){
       <div class="ledger-row"><span class="name">جمع دریافتی</span><span class="filler"></span><span class="amount">${toman(paid)} ت</span></div>
       <div class="ledger-row"><span class="name" style="color:${newBalance>0?'var(--rust)':'var(--olive-dark)'}">مانده جدید</span><span class="filler"></span><span class="amount" style="color:${newBalance>0?'var(--rust)':'var(--olive-dark)'}">${toman(Math.abs(newBalance))} ت ${balanceStatusWord(newBalance)}</span></div>
       <div class="ledger-row" style="border-top:1.5px dashed var(--border);margin-top:6px;padding-top:10px;">
-        <span class="name" style="font-weight:700;">سود برآوردی این فاکتور (بر اساس میانگین موجودی FIFO)</span><span class="filler"></span>
+        <span class="name" style="font-weight:700;">سود این فاکتور (بر اساس FIFO)</span><span class="filler"></span>
         <span class="amount" style="color:${profitColor};font-weight:700;font-size:1.05rem;">${profit<0?'−':''}${toman(Math.abs(profit))} ت</span>
       </div>
     `;
@@ -1722,13 +1840,21 @@ function openInvoiceForm(cid, editInv){
     // other sheet in the app.
     const _prevSheetEl = document.querySelector('.sheet');
     const _prevScrollTop = _prevSheetEl ? _prevSheetEl.scrollTop : 0;
+    // No-Purchase Reason: expected SKUs missing from current basket (non-blocking)
+    const basketPids = rows.map(function(r){ return r.productId; }).filter(Boolean);
+    const nprCandidatesInv = (typeof getNoPurchaseCandidates === 'function')
+      ? getNoPurchaseCandidates(cid, basketPids, 3)
+      : [];
+    const nprHtmlInv = (typeof noPurchasePromptHtml === 'function')
+      ? noPurchasePromptHtml(nprCandidatesInv, 'invoice', 'این مشتری معمولاً این محصول را می‌خرد، ولی در فاکتور فعلی نیست — علت؟')
+      : '';
     openSheet(`
       <h3>${editInv?('ویرایش فاکتور #'+(editInv.number||'—')):'فاکتور جدید'}</h3>
       ${editInv?`<div class="empty" style="padding:0 0 8px;text-align:right;">با ذخیره‌ی این ویرایش، موجودی انبار و مانده حساب مشتری به‌طور خودکار اصلاح می‌شود.</div>`:''}
       <div class="field"><label>تاریخ</label>${shamsiDateInputHTML('f-date', editInv?editInv.date:todayISO())}</div>
       <div id="items-wrap">${itemsHtml()}</div>
       <button class="btn secondary small" id="add-row">+ افزودن قلم</button>
-      ${reasonCodesHtml()}
+      ${nprHtmlInv}
 
       <h2 class="section-title">دریافتی همراه این فاکتور (اختیاری)</h2>
       <div class="field" style="display:flex;gap:8px;">
@@ -1765,7 +1891,8 @@ function openInvoiceForm(cid, editInv){
       if(_newSheetEl) _newSheetEl.scrollTop = _prevScrollTop;
     }
     updateSummary();
-    bindReasonCodes();
+    // No-Purchase Reason chips (re-bound after every renderSheet rebuild)
+    if(typeof bindNoPurchasePrompt === 'function') bindNoPurchasePrompt(cid);
 
     document.getElementById('add-row').addEventListener('click', ()=>{
       rows.push({productId:'', qty:1, price:0, discount:0});
@@ -1872,6 +1999,18 @@ function openInvoiceForm(cid, editInv){
       closeAllProductDrops();
       updateRowInfo(idx);
       updateSummary();
+      // Hide No-Purchase prompt for products now in the basket
+      try{
+        const card = document.getElementById('npr-card');
+        if(card){
+          card.querySelectorAll('.npr-chip[data-npr-pid="' + productId + '"]').forEach(function(chip){
+            const block = chip.closest('.npr-product');
+            if(block) block.style.display = 'none';
+          });
+          const remaining = card.querySelectorAll('.npr-product:not([style*="display: none"])');
+          if(!remaining.length) card.style.display = 'none';
+        }
+      }catch(eNpr){ /* non-critical */ }
     }
 
     // Single gesture open via pointerup (avoids focus+click double-open on mobile)
@@ -2130,11 +2269,6 @@ function openInvoiceForm(cid, editInv){
       newInv.number = nextInvoiceNumber();
       data.invoices.push(newInv);
       pushInvoicePayments(cid, newInv, cashPaid, cardPaid, transferPaid, checkAmount, checkDue, null);
-      Object.keys(reasonAnswers).forEach(function(pid){
-        const a=reasonAnswers[pid];
-        if(!a || !a.reasonCode || typeof ReasonCodes==='undefined') return;
-        ReasonCodes.recordReasonCode(cid,pid,a.reasonCode,a.otherText||'', 'order_entry', {invoiceId:newInv.id});
-      });
       try{
         await saveData();
       }catch(e){

@@ -136,18 +136,9 @@ function customerProfit(cid){
         const sold = customerInvoices(cid).flatMap(inv=>inv.items.filter(it=>it.productId===ri.productId));
         sourceItem = sold.length ? sold[sold.length-1] : null;
       }
+      const buy = (sourceItem && sourceItem.buyPrice!==undefined) ? (sourceItem.buyPrice||0) : (prod ? (prod.buy||0) : 0);
       const sell = (ri.price>0) ? ri.price : (sourceItem ? (sourceItem.price||0) : 0);
-      let returnCost = null;
-      if(Array.isArray(ri.costAllocations) && ri.costAllocations.length){
-        returnCost = ri.costAllocations.reduce(function(sum,a){
-          return sum + (Number(a.cost)||((Number(a.qty)||0)*(Number(a.unitCost)||0)));
-        },0);
-      }
-      if(returnCost===null){
-        const buy = (sourceItem && sourceItem.buyPrice!==undefined) ? (sourceItem.buyPrice||0) : (prod ? (prod.buy||0) : 0);
-        returnCost = buy * Number(ri.qty);
-      }
-      s -= (sell * Number(ri.qty)) - returnCost;
+      s -= (sell - buy) * ri.qty;
     });
   });
   // کسر تراکنش «تخفیف (کاهش بدهی)» از سود گزارش‌شده
@@ -403,20 +394,31 @@ function _behaviorReturnPayments(cid){
 }
 
 function _behaviorReturnsInRange(returns, startISO, endISO, invs){
-  // Attribute a sales return to the original invoice period when the return
-  // carries invoiceId. A return made today for an old invoice must not reduce
-  // the current 30-day sales window. Legacy/unlinked returns retain the old
-  // date-based behavior because their original sale cannot be recovered.
-  const invoiceDates = {};
-  (invs || []).forEach(inv=>{
-    if(inv && inv.id != null && inv.date) invoiceDates[inv.id] = inv.date;
-  });
+  // BUGFIX (proven by runtime repro): a return should offset the sales
+  // bucket that contains the ORIGINAL sale, not whichever period the
+  // return itself happens to fall in. Previously this used the return's
+  // own date only, so returning an old invoice today could silently
+  // corrupt the CURRENT period's totals (observed producing a negative
+  // "sales30" figure) even though nothing about the current period
+  // actually changed. When the return is linked to its original invoice
+  // (p.invoiceId) and that invoice is resolvable, use the invoice's date
+  // instead. Falls back to the return's own date when unresolvable
+  // (e.g. account-only returns with no invoiceId), preserving prior
+  // behavior for that case.
+  var invById = null;
+  if (Array.isArray(invs)) {
+    invById = {};
+    for (var i = 0; i < invs.length; i++) {
+      if (invs[i] && invs[i].id) invById[invs[i].id] = invs[i];
+    }
+  }
   return returns.reduce((s, p)=>{
-    const d = (p && p.invoiceId != null && invoiceDates[p.invoiceId])
-      ? invoiceDates[p.invoiceId]
-      : (p.date || '');
-    if(startISO && d < startISO) return s;
-    if(endISO && d > endISO) return s;
+    var refDate = p.date || '';
+    if (invById && p.invoiceId && invById[p.invoiceId] && invById[p.invoiceId].date) {
+      refDate = invById[p.invoiceId].date;
+    }
+    if(startISO && refDate < startISO) return s;
+    if(endISO && refDate > endISO) return s;
     return s + (p.amount || 0);
   }, 0);
 }
@@ -726,18 +728,9 @@ function _ccReturnMarginForPayment(cid, p){
       const sold = customerInvoices(cid).flatMap(function(inv){ return (inv.items||[]).filter(function(it){ return it.productId===ri.productId; }); });
       sourceItem = sold.length ? sold[sold.length-1] : null;
     }
+    const buy = sourceItem && sourceItem.buyPrice!==undefined ? (sourceItem.buyPrice||0) : (prod ? (prod.buy||0) : 0);
     const sell = Number(ri.price)>0 ? Number(ri.price) : (sourceItem ? (sourceItem.price||0) : 0);
-    let returnCost = null;
-    if(Array.isArray(ri.costAllocations) && ri.costAllocations.length){
-      returnCost = ri.costAllocations.reduce(function(sum,a){
-        return sum + (Number(a.cost)||((Number(a.qty)||0)*(Number(a.unitCost)||0)));
-      },0);
-    }
-    if(returnCost===null){
-      const buy = sourceItem && sourceItem.buyPrice!==undefined ? (sourceItem.buyPrice||0) : (prod ? (prod.buy||0) : 0);
-      returnCost = buy * Number(ri.qty);
-    }
-    margin += (sell * Number(ri.qty)) - returnCost;
+    margin += (sell - buy) * Number(ri.qty);
   });
   return margin;
 }

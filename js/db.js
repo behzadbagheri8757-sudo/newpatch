@@ -1,5 +1,5 @@
 /* db.js — IndexedDB, normalizeData, loadData, saveData
-   Phase 0 extract: no logic changes. DB_NAME/store/keys unchanged.
+   Freeze blocker fix: recover any interrupted cross-subsystem restore before load.
 */
 // ---------- IndexedDB layer ----------
 // Chosen over localStorage because: async (never blocks the UI thread on an
@@ -417,8 +417,6 @@ function normalizeData(parsed){
     priceHistory: p.priceHistory||[],
     stockLog: p.stockLog||[],
     active: p.active!==false,
-    // Explicit strategic override; legacy products without the field remain false.
-    strategic: p.strategic === true,
   }));
   d.customers = (parsed.customers||[]).map(c=>({
     id: c.id||uid(),
@@ -454,9 +452,6 @@ function normalizeData(parsed){
     // برگشت‌های قدیمی این فیلد را ندارند => آرایه خالی => رفتار قبلی (فقط اصلاح حساب) دقیقاً حفظ می‌شود
     returnItems: Array.isArray(p.returnItems) ? p.returnItems.map(ri=>({
       productId: ri.productId, name: ri.name||'', qty: ri.qty||0, price: ri.price||0,
-      costAllocations: Array.isArray(ri.costAllocations) ? ri.costAllocations.map(a=>({
-        qty: Number(a.qty)||0, unitCost: Number(a.unitCost)||0, cost: Number(a.cost)||0
-      })) : undefined,
     })) : [],
   }));
   d.checks = (parsed.checks||[]).map(c=>({
@@ -485,24 +480,6 @@ function normalizeData(parsed){
   d.regions = (parsed.regions||[]).map(r=>({ id: r.id||uid(), name: r.name||'' }));
   d.routes = (parsed.routes||[]).map(r=>({ id: r.id||uid(), regionId: r.regionId||null, name: r.name||'' }));
   d.neighborhoods = (parsed.neighborhoods||[]).map(n=>({ id: n.id||uid(), routeId: n.routeId||null, name: n.name||'' }));
-
-  // Reason Codes are persistent business context. Preserve their supported fields
-  // through reload/backup/restore; legacy backups without the array remain safe.
-  d.reasonCodes = Array.isArray(parsed.reasonCodes) ? parsed.reasonCodes.map(r=>({
-    id: r && r.id ? r.id : uid(),
-    type: r && r.type ? String(r.type) : 'response',
-    point: r && r.point ? String(r.point) : 'order_entry',
-    timestamp: r && r.timestamp ? String(r.timestamp) : '',
-    customerId: r && r.customerId ? r.customerId : null,
-    productId: r && r.productId ? r.productId : null,
-    productName: r && r.productName ? String(r.productName) : '',
-    sellerId: r && r.sellerId ? String(r.sellerId) : 'default',
-    reasonCode: r && r.reasonCode ? String(r.reasonCode) : undefined,
-    otherText: r && r.otherText ? String(r.otherText).slice(0,50) : undefined,
-    invoiceId: r && r.invoiceId ? r.invoiceId : undefined,
-    visitId: r && r.visitId ? r.visitId : undefined,
-  })).filter(r=>r.customerId && r.productId && r.timestamp) : [];
-
   // inventory layers (FIFO)
   // schema < 3 or missing/empty layers → build from real purchases (never claim empty=[] is migration)
   if(inputSchemaVersion >= 3 && Array.isArray(parsed.inventoryLayers) && parsed.inventoryLayers.length){
@@ -559,9 +536,11 @@ function normalizeData(parsed){
 
 async function loadData(){
   try{
+    if(typeof _recoverPendingRestoreJournal === 'function') await _recoverPendingRestoreJournal();
     const record = await dbGet(RECORD_KEY);
     if(record && record.value){
       data = normalizeData(JSON.parse(record.value));
+      _lastPersistedData = JSON.parse(JSON.stringify(data));
     } else if(window.storage){
       // fallback: recover from an older window.storage-based save, if this
       // file was ever previously run inside a Claude artifact sandbox
@@ -585,10 +564,13 @@ async function saveData(){
   try{
     data.schemaVersion = CURRENT_SCHEMA_VERSION;
     await dbPut(RECORD_KEY, JSON.stringify(data));
+    _lastPersistedData = JSON.parse(JSON.stringify(data));
   }catch(e){
     console.error('save failed', e);
-    showToast('⚠️ ذخیره نشد، دوباره تلاش کن');
-    // Propagate failure so callers do not show success / close modal / navigate
+    // Global last-known-good rollback closes the remaining integrity gap for
+    // mutation paths that do not maintain their own previousData snapshot.
+    try{ data = JSON.parse(JSON.stringify(_lastPersistedData)); }catch(rollbackErr){ console.error('global save rollback failed', rollbackErr); }
+    showToast('⚠️ ذخیره نشد؛ تغییر انجام‌شده برگردانده شد');
     throw e;
   }
   // fire-and-forget: بکاپ خودکار کاملاً جدا از ذخیره‌ی اصلی اجرا می‌شود؛
