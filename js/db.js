@@ -436,6 +436,8 @@ function normalizeData(parsed){
   }));
   d.invoices = (parsed.invoices||[]).map(i=>({
     id:i.id||uid(), number:i.number, customerId:i.customerId, date:i.date,
+    // G5: optional link to a Visit (relationship only; independent workflows)
+    visitId: i.visitId || null,
     items:(i.items||[]).map(it=>({
       productId:it.productId, name:it.name, qty:it.qty, price:it.price,
       buyPrice:it.buyPrice||0, discount:it.discount||0, weight:it.weight||0,
