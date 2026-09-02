@@ -90,6 +90,23 @@
     const st = invoicePayStatus(inv);
     const hasSnapshot = typeof inv.prevBalance === 'number';
 
+    /* G5: optional Visit↔Invoice relationship (invoice side only; independent workflows) */
+    let linkedVisitLabel = '';
+    if (inv.visitId && cust) {
+      const lv = (cust.visits || []).find(function (v) { return v.id === inv.visitId; });
+      if (lv) {
+        linkedVisitLabel = (typeof faDate === 'function' ? faDate(lv.date) : lv.date) +
+          (lv.time ? ' ' + lv.time : '') +
+          (lv.result ? ' — ' + lv.result : '');
+      } else {
+        linkedVisitLabel = 'ویزیت مرتبط (شناسه ثبت‌شده)';
+      }
+    }
+    const customerVisits = (cust && Array.isArray(cust.visits)) ? cust.visits.slice().sort(function (a, b) {
+      return (b.date || '').localeCompare(a.date || '') || (b.time || '').localeCompare(a.time || '');
+    }) : [];
+
+
     const invProfit = (inv.items || []).reduce(function (a, it) {
       return a + ((it.price || 0) - (it.buyPrice || 0)) * (it.qty || 0) - (it.discount || 0);
     }, 0) - ((inv.discountType === 'percent') ? 0 : (inv.discount || 0));
@@ -151,6 +168,28 @@
         <div class="card wide"><div class="label">سود اقلام این فاکتور (قیمت − buyPrice تاریخی)</div><div class="value accent-amber">${toman(invProfit)} ت</div></div>
       </div>
 
+      <h3 class="sub-title">ارتباط با ویزیت (اختیاری)</h3>
+      <div class="card" style="margin-bottom:14px;">
+        <div class="label">ویزیت مرتبط با این فاکتور</div>
+        <div style="font-size:.88rem;margin-top:6px;line-height:1.7;">
+          ${inv.visitId
+            ? ('<b>' + esc(linkedVisitLabel) + '</b>' +
+               ' <button type="button" class="btn small secondary" data-inv-action="unlink-visit" style="margin-right:8px;">حذف ارتباط</button>')
+            : '<span class="sub">متصل نیست — ویزیت و فاکتور رویدادهای مستقل‌اند؛ فقط در صورت نیاز وصل کنید.</span>'}
+        </div>
+        ${!inv.visitId && customerVisits.length ? (
+          '<div class="field" style="margin-top:10px;"><label>اتصال به ویزیت این مشتری</label>' +
+          '<select id="inv-link-visit"><option value="">— انتخاب ویزیت —</option>' +
+          customerVisits.map(function (v) {
+            const lab = (typeof faDate === 'function' ? faDate(v.date) : v.date) +
+              (v.time ? ' ' + v.time : '') + (v.result ? ' — ' + v.result : '');
+            return '<option value="' + esc(v.id) + '">' + esc(lab) + '</option>';
+          }).join('') +
+          '</select></div>' +
+          '<div class="btn-row"><button type="button" class="btn small secondary" data-inv-action="link-visit">ثبت ارتباط</button></div>'
+        ) : (!inv.visitId ? '<div class="empty" style="padding:8px 0;">برای این مشتری ویزیتی ثبت نشده</div>' : '')}
+      </div>
+
       <h3 class="sub-title">عملیات</h3>
       <div class="btn-row" style="margin-bottom:16px;">
         <button type="button" class="btn small" data-inv-action="print">چاپ</button>
@@ -201,6 +240,34 @@
               return;
             }
             openEditInvoice(inv.id, inv.customerId);
+          } else if (action === 'link-visit') {
+            (async function () {
+              const sel = document.getElementById('inv-link-visit');
+              const vid = sel && sel.value;
+              if (!vid) { showToast('یک ویزیت انتخاب کنید'); return; }
+              inv.visitId = vid;
+              try {
+                await saveData();
+                showToast('ارتباط با ویزیت ثبت شد');
+                drawInvoicePage(rootEl || root);
+              } catch (err) {
+                console.error(err);
+                showToast('ذخیره نشد');
+              }
+            })();
+          } else if (action === 'unlink-visit') {
+            (async function () {
+              if (!confirm('ارتباط این فاکتور با ویزیت حذف شود؟ (خود ویزیت و فاکتور حذف نمی‌شوند)')) return;
+              delete inv.visitId;
+              try {
+                await saveData();
+                showToast('ارتباط حذف شد');
+                drawInvoicePage(rootEl || root);
+              } catch (err) {
+                console.error(err);
+                showToast('ذخیره نشد');
+              }
+            })();
           } else if (action === 'del') {
             (async function () {
               if (typeof invoiceHasLinkedStockReturn === 'function' && invoiceHasLinkedStockReturn(inv.id)) {

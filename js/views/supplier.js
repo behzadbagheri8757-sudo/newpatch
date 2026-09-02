@@ -49,10 +49,19 @@
             <div class="field"><label>تاریخ برگشت</label>${shamsiDateInputHTML('f-ret-date', todayISO())}</div>
             <div id="ret-item-rows">
             ${(purchase.items || []).map(it => {
-              const remLineQty = purchaseLineRemainingQty(purchase, it.id);
+              // G4: display actual returnable under FIFO+stock (not merely purchase−returned)
+              const remLineQty = (typeof purchaseLineActualReturnableQty === 'function')
+                ? purchaseLineActualReturnableQty(purchase, it.id)
+                : purchaseLineRemainingQty(purchase, it.id);
+              if (remLineQty <= 0) {
+                return `<div class="field" style="opacity:.55;">
+                  <label>${esc(it.name)} (خریداری‌شده: ${it.qty} — <span class="accent-rust">۰ قابل‌برگشت</span>؛ موجودی این خرید مصرف شده)</label>
+                  <input class="ret-item-qty" data-item-id="${it.id}" data-product-id="${it.productId}" data-unit-cost="${it.unitCost}" data-max="0" type="text" inputmode="decimal" disabled value="">
+                </div>`;
+              }
               return `<div class="field">
                 <label>${esc(it.name)} (خریداری‌شده: ${it.qty}، حداکثر قابل‌برگشت: ${remLineQty})</label>
-                <input class="ret-item-qty" data-item-id="${it.id}" data-product-id="${it.productId}" data-unit-cost="${it.unitCost}" data-max="${remLineQty}" type="text" inputmode="decimal" placeholder="تعداد برگشتی (اختیاری)" ${remLineQty <= 0 ? 'disabled' : ''}>
+                <input class="ret-item-qty" data-item-id="${it.id}" data-product-id="${it.productId}" data-unit-cost="${it.unitCost}" data-max="${remLineQty}" type="text" inputmode="decimal" placeholder="تعداد برگشتی (اختیاری)">
               </div>`;
             }).join('')}
             </div>
@@ -134,14 +143,20 @@
         }
 
         // Single-item return
-        const remainingQty = purchaseReturnRemainingQty(purchase);
+        const remainingQtyAcct = purchaseReturnRemainingQty(purchase);
+        const remainingQty = (typeof purchaseActualReturnableQty === 'function')
+          ? purchaseActualReturnableQty(purchase)
+          : remainingQtyAcct;
         openSheet(`
           <h3>برگشت خرید از ${esc(s.name)}</h3>
           <div class="empty" style="padding:0 0 8px;text-align:right;">${faDate(purchase.date)} — مبلغ کل: ${toman(purchase.amount)} ت${returnedAmountSoFar > 0 ? ` — قبلاً برگشت‌شده: ${toman(returnedAmountSoFar)} ت` : ''}</div>
           <div class="field"><label>تاریخ برگشت</label>${shamsiDateInputHTML('f-ret-date', todayISO())}</div>
-          ${purchase.productId ? `<div class="field"><label>مقدار برگشتی (حداکثر ${remainingQty})</label><input id="f-ret-qty" type="text" inputmode="decimal"></div>` : ''}
-          <div class="field"><label>مبلغ برگشتی (تومان، حداکثر ${toman(remainingAmount)})</label><input id="f-ret-amount" type="text" inputmode="decimal"></div>
-          <div class="btn-row"><button class="btn" id="save-return">ثبت برگشت</button></div>
+          ${purchase.productId ? (remainingQty > 0
+            ? `<div class="field"><label>مقدار برگشتی (حداکثر ${remainingQty})</label><input id="f-ret-qty" type="text" inputmode="decimal"></div>`
+            : `<div class="empty" style="padding:8px 0;text-align:right;color:var(--color-danger);">موجودی قابل‌برگشت از این خرید: ۰ (همه مصرف/فروخته شده)</div>`)
+            : ''}
+          <div class="field"><label>مبلغ برگشتی (تومان، حداکثر ${toman(remainingAmount)})</label><input id="f-ret-amount" type="text" inputmode="decimal" ${purchase.productId && remainingQty <= 0 ? 'disabled' : ''}></div>
+          <div class="btn-row"><button class="btn" id="save-return" ${purchase.productId && remainingQty <= 0 ? 'disabled' : ''}>ثبت برگشت</button></div>
         `);
         if (purchase.productId) {
           document.getElementById('f-ret-qty').addEventListener('input', function () {
@@ -585,9 +600,14 @@
       const remainingAmount = (typeof purchaseReturnRemainingAmount === 'function')
         ? purchaseReturnRemainingAmount(p)
         : Math.max(0, (p.amount || 0) - ret);
+      // G4: for stocked purchases, only show return if FIFO/stock still allows return
+      let canReturn = remainingAmount > 0;
+      if (canReturn && (p.productId || (p.items && p.items.length)) && typeof purchaseActualReturnableQty === 'function') {
+        canReturn = purchaseActualReturnableQty(p) > 0;
+      }
       const itemsHint = (p.items && p.items.length) ? (p.items.length + ' قلم') :
         (p.productId ? ((data.products.find(x => x.id === p.productId) || {}).name || 'کالا') : (p.desc || 'خرید'));
-      const retBtn = remainingAmount > 0
+      const retBtn = canReturn
         ? '<br><button type="button" class="btn secondary small" data-return-purchase="' + esc(p.id) + '">برگشت</button>'
         : '';
       return `<div class="ledger-row">
