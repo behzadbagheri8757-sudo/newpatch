@@ -2525,6 +2525,37 @@ function openAddSupplier(){
   });
 }
 
+
+  /** G4: one-tap purchase-return reason (metadata only; no stock/FIFO impact). */
+  function openPurchaseReturnReasonPicker(onPick){
+    const REASONS = [
+      { value: 'defective', label: 'خرابی' },
+      { value: 'deliveryError', label: 'اشتباه در ارسال' },
+      { value: 'overstock', label: 'مازاد کالا' },
+      { value: 'changeMind', label: 'تغییر نظر' },
+      { value: 'complaint', label: 'شکایت' },
+      { value: 'other', label: 'سایر' },
+    ];
+    openSheet(
+      '<h3>برگشت خرید</h3>' +
+      '<div class="visit-card visit-card-enter">' +
+        '<div class="q-title">علت مرجوعی؟</div>' +
+        '<div class="chip-wrap">' +
+          REASONS.map(function(r){
+            return '<button type="button" class="chip-opt" data-pr-reason="' + esc(r.value) + '">' + esc(r.label) + '</button>';
+          }).join('') +
+        '</div>' +
+      '</div>'
+    );
+    const root = document.getElementById('modalRoot');
+    root.querySelectorAll('[data-pr-reason]').forEach(function(btn){
+      btn.addEventListener('click', function(){
+        const v = btn.getAttribute('data-pr-reason');
+        if(typeof onPick === 'function') onPick(v);
+      });
+    });
+  }
+
 function openSupplierDetail(sid){
   if (typeof isSpaShell === 'function' && isSpaShell() && typeof AppRouter !== 'undefined' && AppRouter.navigate) {
     AppRouter.navigate('/supplier', { id: sid });
@@ -2953,22 +2984,28 @@ function openSupplierDetail(sid){
           if(!confirm('با ثبت این برگشت، موجودی انبار و بدهی به تامین‌کننده اصلاح خواهد شد. ادامه می‌دهید؟')) throw new Error('validation');
           const totalQty = lineReturns.reduce((a,l)=>a+l.qty,0);
           const retLines = lineReturns.map(l=>({productId:l.productId, qty:l.qty, itemId:l.itemId}));
-          // اسنپ‌شات کامل قبل از هر mutation — همان الگوی ثبت/ویرایش فاکتور.
-          const previousData = JSON.parse(JSON.stringify(data));
-          const retResult = applyPurchaseReturnStockEffects(p, retLines, s.name, date);
-          if(!retResult.ok){ alert(retResult.error||'برگشت خرید ممکن نشد'); throw new Error('validation'); }
-          p.returns = p.returns||[];
-          p.returns.push({
-            id:uid(), date, qty:totalQty, amount:totalAmount,
-            items: lineReturns.map(l=>({itemId:l.itemId, productId:l.productId, qty:l.qty, amount:Math.round(l.qty*l.unitCost)})),
+          const lineItemsSnap = lineReturns.map(l=>({itemId:l.itemId, productId:l.productId, qty:l.qty, amount:Math.round(l.qty*l.unitCost)}));
+          // G4: reason required for NEW purchase returns (one reason per return transaction)
+          openPurchaseReturnReasonPicker(async function(returnReason){
+            await withSubmitGuard(document.getElementById('save-return'), async ()=>{
+              const previousData = JSON.parse(JSON.stringify(data));
+              const retResult = applyPurchaseReturnStockEffects(p, retLines, s.name, date);
+              if(!retResult.ok){ alert(retResult.error||'برگشت خرید ممکن نشد'); throw new Error('validation'); }
+              p.returns = p.returns||[];
+              p.returns.push({
+                id:uid(), date, qty:totalQty, amount:totalAmount,
+                items: lineItemsSnap,
+                returnReason: returnReason,
+              });
+              try{
+                await saveData();
+              }catch(saveErr){
+                data = previousData;
+                throw saveErr;
+              }
+              openSupplierDetail(sid); render(); showToast('برگشت خرید ثبت شد');
+            });
           });
-          try{
-            await saveData();
-          }catch(saveErr){
-            data = previousData;
-            throw saveErr;
-          }
-          openSupplierDetail(sid); render(); showToast('برگشت خرید ثبت شد');
           });
         });
         return;
@@ -3010,21 +3047,25 @@ function openSupplierDetail(sid){
         }
         if(amount>liveRemainingAmount){ alert('مبلغ برگشتی از مبلغ باقیمانده‌ی این خرید بیشتره.\n\nمبلغ باقیمانده قابل‌برگشت: '+toman(liveRemainingAmount)+' تومان'); throw new Error('validation'); }
         if(!confirm((p.productId?'با ثبت این برگشت، موجودی انبار و بدهی به تامین‌کننده اصلاح خواهد شد.':'با ثبت این برگشت، فقط بدهی به تامین‌کننده کم می‌شود (موجودی خودکار اصلاح نمی‌شود).')+' ادامه می‌دهید؟')) throw new Error('validation');
-        // اسنپ‌شات کامل قبل از هر mutation — همان الگوی ثبت/ویرایش فاکتور.
-        const previousData = JSON.parse(JSON.stringify(data));
-        if(p.productId && qty>0){
-          const retResult = applyPurchaseReturnStockEffects(p, [{productId:p.productId, qty}], s.name, date);
-          if(!retResult.ok){ alert(retResult.error||'برگشت خرید ممکن نشد'); throw new Error('validation'); }
-        }
-        p.returns = p.returns||[];
-        p.returns.push({id:uid(), date, qty, amount});
-        try{
-          await saveData();
-        }catch(saveErr){
-          data = previousData;
-          throw saveErr;
-        }
-        openSupplierDetail(sid); render(); showToast('برگشت خرید ثبت شد');
+        // G4: reason required for NEW purchase returns (one reason per return transaction)
+        openPurchaseReturnReasonPicker(async function(returnReason){
+          await withSubmitGuard(document.getElementById('save-return'), async ()=>{
+            const previousData = JSON.parse(JSON.stringify(data));
+            if(p.productId && qty>0){
+              const retResult = applyPurchaseReturnStockEffects(p, [{productId:p.productId, qty}], s.name, date);
+              if(!retResult.ok){ alert(retResult.error||'برگشت خرید ممکن نشد'); throw new Error('validation'); }
+            }
+            p.returns = p.returns||[];
+            p.returns.push({id:uid(), date, qty, amount, returnReason: returnReason});
+            try{
+              await saveData();
+            }catch(saveErr){
+              data = previousData;
+              throw saveErr;
+            }
+            openSupplierDetail(sid); render(); showToast('برگشت خرید ثبت شد');
+          });
+        });
         });
       });
     });

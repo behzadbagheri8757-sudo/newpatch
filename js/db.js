@@ -467,10 +467,15 @@ function normalizeData(parsed){
     purchases:(s.purchases||[]).map(p=>({
       id:p.id||uid(), date:p.date, amount:p.amount, desc:p.desc||'', productId:p.productId||'', qty:p.qty||0,
       items: Array.isArray(p.items) ? p.items.map(it=>({id:it.id||uid(), productId:it.productId||'', name:it.name||'', qty:it.qty||0, unitCost:it.unitCost||0, lineAmount:it.lineAmount||0})) : undefined,
-      returns:(p.returns||[]).map(r=>({
-        id:r.id||uid(), date:r.date||p.date, qty:r.qty||0, amount:r.amount||0,
-        items: Array.isArray(r.items) ? r.items.map(x=>({itemId:x.itemId, productId:x.productId||'', qty:x.qty||0, amount:x.amount||0})) : undefined,
-      })),
+      returns:(p.returns||[]).map(r=>{
+        const out = {
+          id:r.id||uid(), date:r.date||p.date, qty:r.qty||0, amount:r.amount||0,
+          items: Array.isArray(r.items) ? r.items.map(x=>({itemId:x.itemId, productId:x.productId||'', qty:x.qty||0, amount:x.amount||0})) : undefined,
+        };
+        // G4: preserve structured purchase-return reason when present (legacy without it stays valid)
+        if(r.returnReason) out.returnReason = r.returnReason;
+        return out;
+      }),
     })),
     payments:s.payments||[],
   }));
