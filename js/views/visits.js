@@ -102,6 +102,18 @@
       if (v.opportunity) extraBits.push('فرصت (مشاهده): ' + v.opportunity);
       if (v.threat) extraBits.push('تهدید (مشاهده): ' + v.threat);
       if (Array.isArray(v.tags) && v.tags.length) extraBits.push('برچسب: ' + v.tags.join('، '));
+      if (Array.isArray(v.offeredProducts) && v.offeredProducts.length) {
+        const rx = { accepted: 'قبول', rejected: 'رد', deferred: 'بعداً' };
+        const rr = { price: 'قیمت', quality: 'کیفیت', competitor: 'رقیب', unavailable: 'ناموجود', no_need: 'عدم نیاز', other: 'سایر' };
+        const bits = v.offeredProducts.map(function (op) {
+          const prod = (typeof data !== 'undefined' && data.products) ? data.products.find(function (p) { return p.id === op.productId; }) : null;
+          const name = prod ? prod.name : (op.productId || '—');
+          let s = name + ' (' + (rx[op.reaction] || op.reaction || '—') + ')';
+          if (op.reaction === 'rejected' && op.rejectionReason) s += ' — ' + (rr[op.rejectionReason] || op.rejectionReason);
+          return s;
+        });
+        extraBits.push('پیشنهاد: ' + bits.join('؛ '));
+      }
       if (v.note) extraBits.push(v.note);
       const extraHtml = extraBits.map(x => `<span class="sub">${esc(x)}</span>`).join('');
       return `<a class="ledger-row" href="#/customer?id=${encodeURIComponent(r.customerId)}" style="text-decoration:none;color:inherit;">

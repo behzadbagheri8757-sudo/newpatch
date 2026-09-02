@@ -294,6 +294,18 @@
             if (v.threat) extraBits.push('تهدید (مشاهده): ' + v.threat);
             if (v.nextAction) extraBits.push('اقدام بعدی: ' + v.nextAction);
             if (Array.isArray(v.tags) && v.tags.length) extraBits.push('برچسب: ' + v.tags.join('، '));
+            if (Array.isArray(v.offeredProducts) && v.offeredProducts.length) {
+              var rxMap = { accepted: 'قبول', rejected: 'رد', deferred: 'بعداً' };
+              var rrMap = { price: 'قیمت', quality: 'کیفیت', competitor: 'رقیب', unavailable: 'ناموجود', no_need: 'عدم نیاز', other: 'سایر' };
+              var bits = v.offeredProducts.map(function (op) {
+                var prod = (data.products || []).find(function (p) { return p.id === op.productId; });
+                var name = prod ? prod.name : (op.productId || '—');
+                var s = name + ' (' + (rxMap[op.reaction] || op.reaction || '—') + ')';
+                if (op.reaction === 'rejected' && op.rejectionReason) s += ' — ' + (rrMap[op.rejectionReason] || op.rejectionReason);
+                return s;
+              });
+              extraBits.push('پیشنهاد: ' + bits.join('؛ '));
+            }
             if (v.note) extraBits.push(v.note);
             const extraHtml = extraBits
               .map(function (x) {
