@@ -97,21 +97,37 @@
               if (!confirm('با ثبت این برگشت، موجودی انبار و بدهی به تامین‌کننده اصلاح خواهد شد. ادامه می‌دهید؟')) throw new Error('validation');
               const totalQty = lineReturns.reduce((a, l) => a + l.qty, 0);
               const retLines = lineReturns.map(l => ({ productId: l.productId, qty: l.qty, itemId: l.itemId }));
-              const previousData = JSON.parse(JSON.stringify(data));
-              const retResult = applyPurchaseReturnStockEffects(purchase, retLines, s.name, date);
-              if (!retResult.ok) { alert(retResult.error || 'برگشت خرید ممکن نشد'); throw new Error('validation'); }
-              purchase.returns = purchase.returns || [];
-              purchase.returns.push({
-                id: uid(),
-                date: date,
-                qty: totalQty,
-                amount: totalAmount,
-                items: lineReturns.map(l => ({ itemId: l.itemId, productId: l.productId, qty: l.qty, amount: Math.round(l.qty * l.unitCost) })),
-              });
-              try { await saveData(); } catch (saveErr) { data = previousData; throw saveErr; }
-              closeModal();
-              drawSupplierPage(rootEl);
-              showToast('برگشت خرید ثبت شد');
+              const lineItemsSnap = lineReturns.map(l => ({ itemId: l.itemId, productId: l.productId, qty: l.qty, amount: Math.round(l.qty * l.unitCost) }));
+              function commitMultiReturn(returnReason) {
+                return (async function () {
+                  const previousData = JSON.parse(JSON.stringify(data));
+                  const retResult = applyPurchaseReturnStockEffects(purchase, retLines, s.name, date);
+                  if (!retResult.ok) { alert(retResult.error || 'برگشت خرید ممکن نشد'); throw new Error('validation'); }
+                  purchase.returns = purchase.returns || [];
+                  const rec = {
+                    id: uid(),
+                    date: date,
+                    qty: totalQty,
+                    amount: totalAmount,
+                    items: lineItemsSnap,
+                  };
+                  if (returnReason) rec.returnReason = returnReason;
+                  purchase.returns.push(rec);
+                  try { await saveData(); } catch (saveErr) { data = previousData; throw saveErr; }
+                  closeModal();
+                  drawSupplierPage(rootEl);
+                  showToast('برگشت خرید ثبت شد');
+                })();
+              }
+              if (typeof openPurchaseReturnReasonPicker === 'function') {
+                openPurchaseReturnReasonPicker(function (returnReason) {
+                  withSubmitGuard(document.getElementById('save-return'), function () {
+                    return commitMultiReturn(returnReason);
+                  });
+                });
+              } else {
+                await commitMultiReturn(null);
+              }
             });
           });
           return;
@@ -159,17 +175,32 @@
               throw new Error('validation');
             }
             if (!confirm((purchase.productId ? 'با ثبت این برگشت، موجودی انبار و بدهی به تامین‌کننده اصلاح خواهد شد.' : 'با ثبت این برگشت، فقط بدهی به تامین‌کننده کم می‌شود (موجودی خودکار اصلاح نمی‌شود).') + ' ادامه می‌دهید؟')) throw new Error('validation');
-            const previousData = JSON.parse(JSON.stringify(data));
-            if (purchase.productId && qty > 0) {
-              const retResult = applyPurchaseReturnStockEffects(purchase, [{ productId: purchase.productId, qty: qty }], s.name, date);
-              if (!retResult.ok) { alert(retResult.error || 'برگشت خرید ممکن نشد'); throw new Error('validation'); }
+            function commitSingleReturn(returnReason) {
+              return (async function () {
+                const previousData = JSON.parse(JSON.stringify(data));
+                if (purchase.productId && qty > 0) {
+                  const retResult = applyPurchaseReturnStockEffects(purchase, [{ productId: purchase.productId, qty: qty }], s.name, date);
+                  if (!retResult.ok) { alert(retResult.error || 'برگشت خرید ممکن نشد'); throw new Error('validation'); }
+                }
+                purchase.returns = purchase.returns || [];
+                const rec = { id: uid(), date: date, qty: qty, amount: amount };
+                if (returnReason) rec.returnReason = returnReason;
+                purchase.returns.push(rec);
+                try { await saveData(); } catch (saveErr) { data = previousData; throw saveErr; }
+                closeModal();
+                drawSupplierPage(rootEl);
+                showToast('برگشت خرید ثبت شد');
+              })();
             }
-            purchase.returns = purchase.returns || [];
-            purchase.returns.push({ id: uid(), date: date, qty: qty, amount: amount });
-            try { await saveData(); } catch (saveErr) { data = previousData; throw saveErr; }
-            closeModal();
-            drawSupplierPage(rootEl);
-            showToast('برگشت خرید ثبت شد');
+            if (typeof openPurchaseReturnReasonPicker === 'function') {
+              openPurchaseReturnReasonPicker(function (returnReason) {
+                withSubmitGuard(document.getElementById('save-return'), function () {
+                  return commitSingleReturn(returnReason);
+                });
+              });
+            } else {
+              await commitSingleReturn(null);
+            }
           });
         });
       });
@@ -436,49 +467,37 @@
   }
 
   function openAddPaymentSheet(s) {
-    const methods = [
-      { value: 'cash', label: 'نقد / کارت / انتقال' },
-      { value: 'check', label: 'چک' },
-    ];
     openSheet(`
-      <h3>ثبت پرداخت</h3>
-      <div class="q-block">
-        <div class="q-title">روش پرداخت</div>
-        <div class="chip-wrap">${methods.map(o => `<button type="button" class="chip-opt" data-suppay-method="${esc(o.value)}">${esc(o.label)}</button>`).join('')}</div>
+      <h3>پرداخت به ${esc(s.name)}</h3>
+      <div class="field">
+        <label>روش پرداخت</label>
+        <select id="f-method">
+          <option value="cash">نقد / کارت / انتقال</option>
+          <option value="check">چک</option>
+        </select>
       </div>
-      <div id="suppay-fields" style="display:none;">
-        <div class="field"><label>مبلغ (تومان)</label><input id="f-amount" type="text" inputmode="decimal"></div>
-        <div class="field"><label>تاریخ پرداخت / صدور</label>${shamsiDateInputHTML('f-date', todayISO())}</div>
-        <div id="check-fields" style="display:none;">
-          <div class="field"><label>تاریخ سررسید</label>${shamsiDateInputHTML('f-due', todayISO())}</div>
-          <div class="field"><label>شماره چک</label><input id="f-check-num"></div>
-          <div class="field"><label>بانک</label><input id="f-bank"></div>
-        </div>
-        <div class="field"><label>توضیح (اختیاری)</label><input id="f-note"></div>
-        <div class="btn-row"><button class="btn" id="save-suppay">ثبت</button></div>
+      <div class="field"><label>مبلغ (تومان)</label><input id="f-amount" type="text" inputmode="decimal"></div>
+      <div class="field"><label>تاریخ پرداخت / صدور</label>${shamsiDateInputHTML('f-date', todayISO())}</div>
+      <div id="check-fields" style="display:none;">
+        <div class="field"><label>تاریخ سررسید</label>${shamsiDateInputHTML('f-due', todayISO())}</div>
+        <div class="field"><label>شماره چک</label><input id="f-check-num"></div>
+        <div class="field"><label>بانک</label><input id="f-bank"></div>
       </div>
+      <div class="field"><label>توضیح (اختیاری)</label><input id="f-note"></div>
+      <div class="btn-row"><button class="btn" id="save-suppay">ثبت</button></div>
     `);
 
-    const root = document.getElementById('modalRoot');
-    const fieldsBlock = document.getElementById('suppay-fields');
+    const methodEl = document.getElementById('f-method');
     const checkFields = document.getElementById('check-fields');
-    let method = '';
-
-    root.querySelectorAll('[data-suppay-method]').forEach(btn => {
-      btn.addEventListener('click', function () {
-        method = this.getAttribute('data-suppay-method');
-        root.querySelectorAll('[data-suppay-method]').forEach(b => {
-          b.classList.toggle('selected', b === this);
-        });
-        checkFields.style.display = method === 'check' ? '' : 'none';
-        fieldsBlock.style.display = 'block';
-      });
+    methodEl.addEventListener('change', function () {
+      checkFields.style.display = this.value === 'check' ? '' : 'none';
     });
 
     document.getElementById('save-suppay').addEventListener('click', async function (ev) {
       await withSubmitGuard(ev.currentTarget, async () => {
         const amount = numVal(document.getElementById('f-amount'));
         const date = document.getElementById('f-date').value || todayISO();
+        const method = methodEl.value;
         const note = (document.getElementById('f-note').value || '').trim();
         if (amount <= 0) { showToast('مبلغ رو وارد کن'); throw new Error('validation'); }
         s.payments = s.payments || [];
@@ -563,14 +582,20 @@
     const purchaseRows = purchases.length ? purchases.map(p => {
       const ret = (p.returns || []).reduce((a, r) => a + (r.amount || 0), 0);
       const net = (p.amount || 0) - ret;
+      const remainingAmount = (typeof purchaseReturnRemainingAmount === 'function')
+        ? purchaseReturnRemainingAmount(p)
+        : Math.max(0, (p.amount || 0) - ret);
       const itemsHint = (p.items && p.items.length) ? (p.items.length + ' قلم') :
         (p.productId ? ((data.products.find(x => x.id === p.productId) || {}).name || 'کالا') : (p.desc || 'خرید'));
+      const retBtn = remainingAmount > 0
+        ? '<br><button type="button" class="btn secondary small" data-return-purchase="' + esc(p.id) + '">برگشت</button>'
+        : '';
       return `<div class="ledger-row">
         <span class="name">${esc(String(itemsHint))}
           <span class="sub">${faDate(p.date)}${ret ? ' — برگشت: ' + toman(ret) + ' ت' : ''}</span>
         </span>
         <span class="filler"></span>
-        <span class="amount">${toman(net)} ت</span>
+        <span class="amount">${toman(net)} ت${retBtn}</span>
       </div>`;
     }).join('') : '<div class="empty" style="padding:12px 0;">خریدی ثبت نشده</div>';
 
