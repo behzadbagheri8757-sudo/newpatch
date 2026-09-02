@@ -2527,34 +2527,35 @@ function openAddSupplier(){
 
 
   /** G4: one-tap purchase-return reason (metadata only; no stock/FIFO impact). */
-  function openPurchaseReturnReasonPicker(onPick){
-    const REASONS = [
-      { value: 'defective', label: 'خرابی' },
-      { value: 'deliveryError', label: 'اشتباه در ارسال' },
-      { value: 'overstock', label: 'مازاد کالا' },
-      { value: 'changeMind', label: 'تغییر نظر' },
-      { value: 'complaint', label: 'شکایت' },
-      { value: 'other', label: 'سایر' },
-    ];
-    openSheet(
-      '<h3>برگشت خرید</h3>' +
-      '<div class="visit-card visit-card-enter">' +
-        '<div class="q-title">علت مرجوعی؟</div>' +
-        '<div class="chip-wrap">' +
-          REASONS.map(function(r){
-            return '<button type="button" class="chip-opt" data-pr-reason="' + esc(r.value) + '">' + esc(r.label) + '</button>';
-          }).join('') +
-        '</div>' +
-      '</div>'
-    );
-    const root = document.getElementById('modalRoot');
-    root.querySelectorAll('[data-pr-reason]').forEach(function(btn){
-      btn.addEventListener('click', function(){
-        const v = btn.getAttribute('data-pr-reason');
-        if(typeof onPick === 'function') onPick(v);
-      });
+function openPurchaseReturnReasonPicker(onPick){
+  const REASONS = [
+    { value: 'defective', label: 'خرابی' },
+    { value: 'deliveryError', label: 'اشتباه در ارسال' },
+    { value: 'overstock', label: 'مازاد کالا' },
+    { value: 'changeMind', label: 'تغییر نظر' },
+    { value: 'complaint', label: 'شکایت' },
+    { value: 'other', label: 'سایر' },
+  ];
+  openSheet(
+    '<h3>برگشت خرید</h3>' +
+    '<div class="visit-card visit-card-enter">' +
+      '<div class="q-title">علت مرجوعی؟</div>' +
+      '<div class="chip-wrap">' +
+        REASONS.map(function(r){
+          return '<button type="button" class="chip-opt" data-pr-reason="' + esc(r.value) + '">' + esc(r.label) + '</button>';
+        }).join('') +
+      '</div>' +
+    '</div>'
+  );
+  const root = document.getElementById('modalRoot');
+  root.querySelectorAll('[data-pr-reason]').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      const v = btn.getAttribute('data-pr-reason');
+      if(typeof onPick === 'function') onPick(v);
     });
-  }
+  });
+}
+
 
 function openSupplierDetail(sid){
   if (typeof isSpaShell === 'function' && isSpaShell() && typeof AppRouter !== 'undefined' && AppRouter.navigate) {
