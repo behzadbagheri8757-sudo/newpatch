@@ -436,37 +436,49 @@
   }
 
   function openAddPaymentSheet(s) {
+    const methods = [
+      { value: 'cash', label: 'نقد / کارت / انتقال' },
+      { value: 'check', label: 'چک' },
+    ];
     openSheet(`
-      <h3>پرداخت به ${esc(s.name)}</h3>
-      <div class="field">
-        <label>روش پرداخت</label>
-        <select id="f-method">
-          <option value="cash">نقد / کارت / انتقال</option>
-          <option value="check">چک</option>
-        </select>
+      <h3>ثبت پرداخت</h3>
+      <div class="q-block">
+        <div class="q-title">روش پرداخت</div>
+        <div class="chip-wrap">${methods.map(o => `<button type="button" class="chip-opt" data-suppay-method="${esc(o.value)}">${esc(o.label)}</button>`).join('')}</div>
       </div>
-      <div class="field"><label>مبلغ (تومان)</label><input id="f-amount" type="text" inputmode="decimal"></div>
-      <div class="field"><label>تاریخ پرداخت / صدور</label>${shamsiDateInputHTML('f-date', todayISO())}</div>
-      <div id="check-fields" style="display:none;">
-        <div class="field"><label>تاریخ سررسید</label>${shamsiDateInputHTML('f-due', todayISO())}</div>
-        <div class="field"><label>شماره چک</label><input id="f-check-num"></div>
-        <div class="field"><label>بانک</label><input id="f-bank"></div>
+      <div id="suppay-fields" style="display:none;">
+        <div class="field"><label>مبلغ (تومان)</label><input id="f-amount" type="text" inputmode="decimal"></div>
+        <div class="field"><label>تاریخ پرداخت / صدور</label>${shamsiDateInputHTML('f-date', todayISO())}</div>
+        <div id="check-fields" style="display:none;">
+          <div class="field"><label>تاریخ سررسید</label>${shamsiDateInputHTML('f-due', todayISO())}</div>
+          <div class="field"><label>شماره چک</label><input id="f-check-num"></div>
+          <div class="field"><label>بانک</label><input id="f-bank"></div>
+        </div>
+        <div class="field"><label>توضیح (اختیاری)</label><input id="f-note"></div>
+        <div class="btn-row"><button class="btn" id="save-suppay">ثبت</button></div>
       </div>
-      <div class="field"><label>توضیح (اختیاری)</label><input id="f-note"></div>
-      <div class="btn-row"><button class="btn" id="save-suppay">ثبت</button></div>
     `);
 
-    const methodEl = document.getElementById('f-method');
+    const root = document.getElementById('modalRoot');
+    const fieldsBlock = document.getElementById('suppay-fields');
     const checkFields = document.getElementById('check-fields');
-    methodEl.addEventListener('change', function () {
-      checkFields.style.display = this.value === 'check' ? '' : 'none';
+    let method = '';
+
+    root.querySelectorAll('[data-suppay-method]').forEach(btn => {
+      btn.addEventListener('click', function () {
+        method = this.getAttribute('data-suppay-method');
+        root.querySelectorAll('[data-suppay-method]').forEach(b => {
+          b.classList.toggle('selected', b === this);
+        });
+        checkFields.style.display = method === 'check' ? '' : 'none';
+        fieldsBlock.style.display = 'block';
+      });
     });
 
     document.getElementById('save-suppay').addEventListener('click', async function (ev) {
       await withSubmitGuard(ev.currentTarget, async () => {
         const amount = numVal(document.getElementById('f-amount'));
         const date = document.getElementById('f-date').value || todayISO();
-        const method = methodEl.value;
         const note = (document.getElementById('f-note').value || '').trim();
         if (amount <= 0) { showToast('مبلغ رو وارد کن'); throw new Error('validation'); }
         s.payments = s.payments || [];
