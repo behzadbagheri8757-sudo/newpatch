@@ -502,6 +502,121 @@ function visitOverdueDays(cid){
   return Math.max(0, daysSince - cadence);
 }
 
+/* Valid rejection reason codes — mirrors REJECTION_REASON_CHIPS in app.js /
+   the rr label map in views/visits.js & views/customer.js. Kept local to
+   calc.js (read-only lookup only); not a new stored schema. */
+var _BEHAVIOR_VALID_REJECTION_REASONS = { price:1, quality:1, competitor:1, unavailable:1, no_need:1, other:1 };
+
+/** Same date-diff mechanism as the avgIntervalDays block above (parseISODateParts,
+ * falling back to new Date(iso) on parse failure) — no new timezone handling invented.
+ * Returns days from isoFrom to isoTo (isoTo - isoFrom), or null if either date is unparsable. */
+function _behaviorDaysDiff(isoFrom, isoTo){
+  const p0 = (typeof parseISODateParts === 'function') ? parseISODateParts(isoFrom) : null;
+  const p1 = (typeof parseISODateParts === 'function') ? parseISODateParts(isoTo) : null;
+  let t0, t1;
+  if(p0 && p1){
+    t0 = new Date(p0.y, p0.m - 1, p0.d).getTime();
+    t1 = new Date(p1.y, p1.m - 1, p1.d).getTime();
+  } else {
+    t0 = new Date(isoFrom).getTime();
+    t1 = new Date(isoTo).getTime();
+  }
+  if(isNaN(t0) || isNaN(t1)) return null;
+  return Math.round((t1 - t0) / 86400000);
+}
+
+/* PHASE 1 — Product Offered + Customer Reaction + Rejection Reason.
+ * Pure derived read from data.customers[].visits[].offeredProducts[]. Never mutates data,
+ * never counts accepted/deferred as a sale/order. */
+function _behaviorOfferedProductStats(visits){
+  const map = {}; // productId -> stat entry
+  const order = [];
+  (visits || []).forEach(v=>{
+    if(!Array.isArray(v.offeredProducts)) return;
+    v.offeredProducts.forEach(op=>{
+      if(!op || !op.productId) return; // skip: no productId
+      const pid = op.productId;
+      if(!map[pid]){
+        const prod = (data.products || []).find(p=>p.id===pid);
+        map[pid] = {
+          productId: pid,
+          productName: prod ? (prod.name || pid) : pid,
+          offeredCount: 0,
+          acceptedCount: 0,
+          rejectedCount: 0,
+          deferredCount: 0,
+          rejectionReasons: {},
+          lastOfferedDate: null,
+        };
+        order.push(pid);
+      }
+      const st = map[pid];
+      st.offeredCount++;
+      if(op.reaction === 'accepted'){
+        st.acceptedCount++;
+      } else if(op.reaction === 'deferred'){
+        st.deferredCount++;
+      } else if(op.reaction === 'rejected'){
+        st.rejectedCount++;
+        const reason = op.rejectionReason;
+        if(reason && _BEHAVIOR_VALID_REJECTION_REASONS[reason]){
+          st.rejectionReasons[reason] = (st.rejectionReasons[reason] || 0) + 1;
+        }
+        // invalid/empty reason: counted in rejectedCount above, just not aggregated by reason
+      }
+      if(v.date && (!st.lastOfferedDate || v.date > st.lastOfferedDate)){
+        st.lastOfferedDate = v.date;
+      }
+    });
+  });
+  return order.map(pid=>map[pid]);
+}
+
+/* PHASE 2 — Visit ↔ Invoice contextual attribution.
+ * Pure derived read from data.invoices[] + this customer's own visits (ownership preserved:
+ * only visits already scoped to this customer are searched). Never mutates data, never
+ * changes invoiceCount/sales30/sales90/visitCount/conversionRate. */
+function _behaviorVisitInvoiceStats(invs, visits){
+  const empty = {
+    linkedInvoiceCount: 0,
+    avgDaysBetweenVisitAndInvoice: null,
+    minDays: null,
+    maxDays: null,
+    lastDays: null,
+    lastInvoiceDate: null,
+    lastVisitDate: null,
+  };
+  if(!Array.isArray(invs) || !invs.length || !Array.isArray(visits) || !visits.length) return empty;
+
+  const links = []; // in ascending invoice order (invs is pre-sorted ascending by date/number)
+  invs.forEach(inv=>{
+    const vid = inv.visitId;
+    if(!vid || typeof vid !== 'string' || !vid.trim()) return; // no/invalid visitId
+    const visit = visits.find(v=>v.id === vid);
+    if(!visit) return; // not resolvable within this customer's own visits → not linked
+    const days = _behaviorDaysDiff(visit.date, inv.date);
+    if(days === null) return; // unparsable dates → not linked
+    if(days < 0) return; // invoice.date < visit.date → excluded from valid attribution, no new rule invented
+    links.push({ days, invoiceDate: inv.date, visitDate: visit.date });
+  });
+
+  if(!links.length) return empty;
+
+  const daysList = links.map(l=>l.days);
+  const sum = daysList.reduce((a,b)=>a+b, 0);
+  const last = links[links.length - 1];
+
+  return {
+    linkedInvoiceCount: links.length,
+    avgDaysBetweenVisitAndInvoice: sum / links.length,
+    minDays: Math.min.apply(null, daysList),
+    maxDays: Math.max.apply(null, daysList),
+    lastDays: last.days,
+    lastInvoiceDate: last.invoiceDate,
+    lastVisitDate: last.visitDate,
+  };
+}
+
 /**
  * Runtime derived behavior profile for sales decisions.
  * Purchase truth = invoices minus sales-returns (payments method==='return').
@@ -659,6 +774,10 @@ function customerBehavior(cid){
     consecutiveNoOrder++;
   }
 
+  // PHASE 1 + PHASE 2 — additive, derived-only metadata (see functions above).
+  const offeredProductStats = _behaviorOfferedProductStats(visits);
+  const visitInvoiceStats = _behaviorVisitInvoiceStats(invs, visits);
+
   return {
     invoiceCount: count,
     firstInvoiceDate,
@@ -682,6 +801,8 @@ function customerBehavior(cid){
     consecutiveNoOrder,
     lastVisit,
     lastNextAction,
+    offeredProductStats,
+    visitInvoiceStats,
   };
 }
 
