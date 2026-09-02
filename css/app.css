@@ -843,6 +843,23 @@ body[data-page="dashboard"] #nav{
   font-size:.88rem;
   color:var(--color-primary);
 }
+
+/* G1–G3 visit one-active-question cards */
+.visit-card-stage{min-height:120px;margin:8px 0 4px;}
+.visit-card{
+  padding:4px 0 10px;
+}
+@keyframes visitCardIn{
+  from{opacity:0;transform:translateX(-12px);}
+  to{opacity:1;transform:translateX(0);}
+}
+.visit-card-enter{
+  animation:visitCardIn .28s cubic-bezier(0.32,0.72,0,1);
+}
+@media (prefers-reduced-motion:reduce){
+  .visit-card-enter{animation:none;}
+}
+
 .debt-row a{text-decoration:none;color:inherit;}
 
 /* ===================== INVOICE PRINT DOCUMENT ===================== */
