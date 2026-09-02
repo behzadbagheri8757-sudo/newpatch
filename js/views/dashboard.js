@@ -236,149 +236,49 @@
 
   /* --- Watch / Early Warning + Lifecycle (additive) ---
      Generation still comes from extractWatchObservations via
-     reconcileWatchLifecycle. Limits for dashboard preview:
-     max 2 per customer, max 2 per productId, max 5 rows.
-     Summary bar shows active + unreviewed counts. */
-  var DASH_WATCH_LEVEL_RANK = { low: 1, medium: 2, high: 3 };
-  function _dashWatchSort(a, b) {
-    var la = DASH_WATCH_LEVEL_RANK[a.level] || 0;
-    var lb = DASH_WATCH_LEVEL_RANK[b.level] || 0;
-    if (lb !== la) return lb - la;
-    // Unreviewed first
-    var ar = a.reviewed ? 1 : 0;
-    var br = b.reviewed ? 1 : 0;
-    if (ar !== br) return ar - br;
-    return (b.deviationStrength || 0) - (a.deviationStrength || 0);
+     reconcileWatchLifecycle. The Dashboard no longer lists individual
+     Watch rows here — it shows one compact summary card that links to
+     the full Watch List (#/watches). Per-occurrence rendering now lives
+     in js/views/watches.js (WatchesView / WatchDetailView), which reads
+     the same existing public Watch API used below. */
+  function faDigits(n) {
+    return String(n).replace(/[0-9]/g, function (d) { return '۰۱۲۳۴۵۶۷۸۹'[d]; });
   }
 
-  function collectDashboardWatches() {
-    var pool = [];
-    if (typeof data === 'undefined' || !Array.isArray(data.customers)) return pool;
+  function watchSummaryHtml() {
+    var count = 0;
+    var haveCount = false;
 
-    // Prefer lifecycle active occurrences (after reconcile)
-    var occs = [];
-    if (typeof getActiveWatchOccurrences === 'function') {
-      try { occs = getActiveWatchOccurrences() || []; } catch (eOcc) { occs = []; }
+    if (typeof getWatchLifecycleSummary === 'function') {
+      try {
+        var summary = getWatchLifecycleSummary();
+        if (summary && typeof summary.active === 'number') {
+          count = summary.active;
+          haveCount = true;
+        }
+      } catch (eS) { /* fall through to fallback below */ }
     }
 
-    if (occs.length) {
-      var nameById = Object.create(null);
-      (data.customers || []).forEach(function (c) {
-        if (c && c.id) nameById[c.id] = c.name || '—';
-      });
-      for (var i = 0; i < occs.length; i++) {
-        var o = occs[i];
-        if (!o) continue;
-        pool.push({
-          occurrenceId: o.id,
-          customerId: o.customerId,
-          customerName: nameById[o.customerId] || '—',
-          productId: o.productId,
-          productName: o.productName || null,
-          category: o.watchCategory,
-          level: o.level,
-          reason: o.generatedReason,
-          reviewed: !!(o.reason),
-          deviationStrength: 0
-        });
-      }
-    } else if (typeof extractWatchObservations === 'function') {
-      // Fallback when lifecycle module not loaded
+    if (!haveCount && typeof extractWatchObservations === 'function' && typeof data !== 'undefined' && Array.isArray(data.customers)) {
+      // Fallback when lifecycle module not loaded (mirrors prior behavior)
       var customers = data.customers.filter(function (c) { return c && c.active !== false; });
       for (var ci = 0; ci < customers.length; ci++) {
-        var c = customers[ci];
-        var watches;
-        try { watches = extractWatchObservations(c.id) || []; } catch (e) { watches = []; }
-        for (var j = 0; j < watches.length; j++) {
-          var w = watches[j];
-          pool.push({
-            occurrenceId: null,
-            customerId: c.id,
-            customerName: c.name || '—',
-            productId: w.productId,
-            productName: w.productName,
-            category: w.category,
-            level: w.level,
-            reason: w.reason,
-            reviewed: false,
-            deviationStrength: w.deviationStrength
-          });
-        }
+        try { count += (extractWatchObservations(customers[ci].id) || []).length; } catch (e) { /* skip */ }
       }
+      haveCount = true;
     }
 
-    pool.sort(_dashWatchSort);
-
-    // Cap: max 2 per customer, max 2 per productId, max 5 total
-    var custCounts = Object.create(null);
-    var productCounts = Object.create(null);
-    var out = [];
-    for (var k = 0; k < pool.length; k++) {
-      var item = pool[k];
-      var cc = custCounts[item.customerId] || 0;
-      if (cc >= 2) continue;
-      if (item.productId) {
-        var pc = productCounts[item.productId] || 0;
-        if (pc >= 2) continue;
-        productCounts[item.productId] = pc + 1;
-      }
-      custCounts[item.customerId] = cc + 1;
-      out.push(item);
-      if (out.length >= 5) break;
-    }
-    return out;
-  }
-
-  function earlyWarningHtml() {
-    var summary = { active: 0, unreviewed: 0 };
-    if (typeof getWatchLifecycleSummary === 'function') {
-      try { summary = getWatchLifecycleSummary() || summary; } catch (eS) {}
-    }
-    var items = [];
-    try { items = collectDashboardWatches(); } catch (e) { items = []; }
-
-    // If no active watches and summary is empty, hide block
-    if (!items.length && !(summary.active > 0)) return '';
-
-    function levelColor(level) {
-      return level === 'high' ? '#B3261E' : level === 'medium' ? '#C77700' : '#6B7280';
-    }
-    function levelLabel(level) {
-      return level === 'high' ? 'زیاد' : level === 'medium' ? 'متوسط' : 'کم';
-    }
-
-    var summaryBar =
-      '<div class="dash-watch-summary" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px;font-size:.82rem;">' +
-        '<span style="font-weight:700;color:var(--ink);">هشدار فعال: ' + (summary.active || items.length) + '</span>' +
-        (summary.unreviewed > 0
-          ? '<span style="color:#C77700;font-weight:600;">بررسی‌نشده: ' + summary.unreviewed + '</span>'
-          : '<span style="color:var(--ink-soft);">همه بررسی شده</span>') +
-      '</div>';
-
-    var rows = items.map(function (w) {
-      var sub = (w.productName ? ('«' + esc(w.productName) + '» — ') : '') + esc(w.reason || '');
-      var href = '#/customer?id=' + encodeURIComponent(w.customerId || '');
-      var badge = w.reviewed
-        ? '<span style="font-size:.72rem;color:var(--olive-dark);font-weight:600;">بررسی شده</span>'
-        : '<span style="font-size:.72rem;color:#C77700;font-weight:600;">بررسی نشده</span>';
-      return '<a class="ledger-row" href="' + href + '">' +
-        '<span class="name">' + esc(w.customerName) + '<span class="sub">' + sub + '</span></span>' +
-        '<span class="filler"></span>' +
-        '<span class="amount" style="text-align:left;">' +
-          badge +
-          '<div style="color:' + levelColor(w.level) + ';font-size:.78rem;font-weight:600;">' + esc(levelLabel(w.level)) + '</div>' +
-        '</span>' +
-        '</a>';
-    }).join('');
-
-    var moreNote = (summary.active > items.length)
-      ? '<div class="report-note" style="margin-top:8px;">نمایش ' + items.length + ' از ' + summary.active + ' هشدار — جزئیات در صفحه مشتری</div>'
-      : '';
+    if (!count) return '';
 
     return '<div class="dashboard-block">' + dashSectionHead(ICO.actions, 'هشدار زودهنگام (Watch)', '', '') +
-      summaryBar +
-      '<div class="dash-activity">' + (rows || '<div class="empty" style="padding:12px 8px;text-align:center;">هشدار فعالی نیست</div>') + '</div>' +
-      moreNote +
+      '<a class="dash-watch-compact" href="#/watches">' +
+        '<span class="dash-watch-compact-ico" aria-hidden="true">' + ICO.actions + '</span>' +
+        '<span class="dash-watch-compact-body">' +
+          '<span class="dash-watch-compact-count">' + faDigits(count) + ' مورد</span>' +
+          '<span class="dash-watch-compact-label">هشدارهای فعال</span>' +
+        '</span>' +
+        '<span class="dash-watch-compact-chevron" aria-hidden="true">‹</span>' +
+      '</a>' +
       '</div>';
   }
 
@@ -532,7 +432,7 @@
       '<div class="dashboard-eyebrow">مرکز فرماندهی روزانه</div>' +
       targetHtml(metrics) +
       todaysActionsHtml() +
-      earlyWarningHtml() +
+      watchSummaryHtml() +
       '<div class="dashboard-block">' + dashSectionHead(ICO.summary, 'خلاصه وضعیت', '', '') +
       '<div class="dash-kpis">' +
       '<a class="dash-kpi sales dash-kpi-link" href="#/reports"><div class="dash-kpi-label">فروش این ماه</div><div class="dash-kpi-value sales">' + money(metrics.mtdSales) + '</div><div class="dash-kpi-sub">' + deltaHtml(metrics.salesDeltaPct) + '</div><span class="dash-kpi-chevron" aria-hidden="true">‹</span></a>' +
