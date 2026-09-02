@@ -3551,3 +3551,16 @@ header{
   .answer-row{grid-template-columns:1fr;gap:3px;}
   .answer-a{padding-inline-start:22px;}
 }
+
+
+/* iOS touch-target refinement: keep compact visual language while giving
+   frequently tapped controls a safer hit area. */
+.btn.small{min-height:40px;}
+.chip{min-height:40px;}
+.close-x{width:44px;height:44px;}
+.shamsi-sheet-btn{min-height:44px;}
+.prospect-daily-target .pdt-edit{min-height:40px;}
+.gc-seg-btn{min-height:40px;height:40px;}
+@media (pointer:coarse){
+  .btn.small,.chip,.prospect-daily-target .pdt-edit,.gc-seg-btn{min-height:44px;}
+}
