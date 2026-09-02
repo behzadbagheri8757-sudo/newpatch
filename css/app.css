@@ -3581,3 +3581,87 @@ header{
 @media (pointer:coarse){
   .btn.small,.chip,.prospect-daily-target .pdt-edit,.gc-seg-btn{min-height:44px;}
 }
+
+
+/* ==========================================================
+   Watch UX patch — Dashboard compact summary, Watch List,
+   Watch Detail. RTL, mobile-first, reuses existing tokens
+   (--ink, --ink-soft, --line, .card, .ledger-row, .btn-row).
+   ========================================================== */
+
+.dash-watch-compact{
+  display:flex;
+  align-items:center;
+  gap:12px;
+  padding:14px;
+  border:1px solid #E8E6E1;
+  border-radius:16px;
+  background:#fff;
+  box-shadow:0 4px 12px rgba(26,38,52,.05);
+  text-decoration:none;
+  color:inherit;
+}
+.dash-watch-compact:active{transform:scale(.98);}
+.dash-watch-compact-ico{
+  flex:0 0 auto;
+  width:38px;
+  height:38px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  border-radius:12px;
+  background:var(--color-warning-soft);
+  color:#B86A12;
+}
+.dash-watch-compact-ico svg{width:20px;height:20px;}
+.dash-watch-compact-body{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;}
+.dash-watch-compact-count{font-size:1.05rem;font-weight:900;color:var(--ink);}
+.dash-watch-compact-label{font-size:.72rem;color:var(--ink-soft);}
+.dash-watch-compact-chevron{flex:0 0 auto;font-size:1.2rem;color:var(--ink-soft);}
+
+/* Watch List rows */
+.watch-list-row .sub{display:block;margin-top:2px;}
+.watch-list-amount{display:flex;flex-direction:column;align-items:flex-end;gap:4px;}
+.watch-reviewed-badge{
+  font-size:.68rem;
+  font-weight:700;
+  color:#C77700;
+  white-space:nowrap;
+}
+.watch-reviewed-badge.is-reviewed{color:var(--olive-dark);}
+.watch-severity-badge{
+  font-size:.72rem;
+  font-weight:700;
+  white-space:nowrap;
+}
+
+/* Watch Detail */
+.watch-detail-card{display:flex;flex-direction:column;gap:12px;margin-bottom:14px;}
+.watch-detail-head{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+}
+.watch-detail-head .name{
+  font-weight:700;
+  color:var(--ink);
+  text-decoration:none;
+  font-size:.95rem;
+}
+.watch-detail-block .label{margin-bottom:4px;}
+.watch-detail-value{
+  font-size:.88rem;
+  color:var(--ink);
+  line-height:1.7;
+}
+.watch-detail-reason .watch-detail-value{
+  background:var(--color-warning-soft);
+  border-radius:10px;
+  padding:10px 12px;
+  color:#7A4A0C;
+}
+
+@media (pointer:coarse){
+  .dash-watch-compact,.watch-list-row{min-height:44px;}
+}
