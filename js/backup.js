@@ -35,6 +35,8 @@ const PRERESTORE_PROSPECT_KEY = 'preRestoreProspect';
 const PRERESTORE_INTELLIGENCE_KEY = 'preRestoreIntelligence';
 /** کلید اسنپ‌شات هدف فروش ماهانه قبل از Restore */
 const PRERESTORE_TARGET_KEY = 'preRestoreSalesTarget';
+/** کلید اسنپ‌شات Watch Lifecycle قبل از Restore */
+const PRERESTORE_WATCH_KEY = 'preRestoreWatchLifecycle';
 
 /**
  * دسترسی مستقیم به ProspectScoutDB (بدون وابستگی به لود بودن prospect-db.js)
@@ -326,6 +328,45 @@ async function restoreIntelligenceBundle(bundle){
   }
 }
 
+
+/* ============================================================
+   Watch Lifecycle backup / restore (bagheri_watch_db) — additive
+   ============================================================ */
+async function exportWatchLifecycleBundleForBackup(){
+  try{
+    if(typeof exportWatchLifecycleBundle === 'function'){
+      return await exportWatchLifecycleBundle();
+    }
+  }catch(e){
+    console.error('exportWatchLifecycleBundleForBackup failed', e);
+  }
+  return null;
+}
+
+async function restoreWatchLifecycleBundleForBackup(bundle){
+  try{
+    if(!bundle) return true;
+    if(typeof restoreWatchLifecycleBundle === 'function'){
+      return await restoreWatchLifecycleBundle(bundle);
+    }
+  }catch(e){
+    console.error('restoreWatchLifecycleBundleForBackup failed', e);
+    return false;
+  }
+  return true;
+}
+
+function _validateWatchLifecycleBundle(bundle){
+  if(!_isPlainObject(bundle)) return false;
+  if(bundle.version != null && Number(bundle.version) !== 1) return false;
+  if(!Array.isArray(bundle.occurrences)) return false;
+  for(const row of bundle.occurrences){
+    if(!_isPlainObject(row) || row.id == null || row.customerId == null || !row.watchCategory) return false;
+    if(row.status != null && !['active','resolved','dismissed'].includes(String(row.status))) return false;
+  }
+  return true;
+}
+
 async function exportBackupJSON(){
   const stamp = todayISO();
   // سازگاری: همان فیلدهای data در ریشه؛ prospectScout و intelligence اختیاری و اضافه
@@ -340,6 +381,9 @@ async function exportBackupJSON(){
 
   const intelligence = await exportIntelligenceBundle();
   if(intelligence) payload.intelligence = intelligence;
+
+  const watchLifecycle = await exportWatchLifecycleBundleForBackup();
+  if(watchLifecycle) payload.watchLifecycle = watchLifecycle;
 
   await downloadFile(`baqeri-backup-${stamp}.json`, JSON.stringify(payload, null, 2), 'application/json');
   showToast('فایل بکاپ آماده شد');
@@ -565,6 +609,11 @@ function validateBackupShape(parsed){
     if(parsed.prospectScout!=null && !_validateProspectBundle(parsed.prospectScout, customerIds, new Set(), schema)) return false;
     if(parsed.intelligence!=null && !_validateIntelligenceBundle(parsed.intelligence, customerIds, productIds)) return false;
   }
+  // Optional additive: invalid watchLifecycle must not reject whole backup
+  if(parsed.watchLifecycle != null && !_validateWatchLifecycleBundle(parsed.watchLifecycle)){
+    try{ console.warn('backup watchLifecycle invalid — ignoring'); }catch(_e){}
+    delete parsed.watchLifecycle;
+  }
   return true;
 }
 
@@ -681,6 +730,10 @@ async function _restoreParsedBackup(parsed){
     await dbPut(PRERESTORE_PROSPECT_KEY, JSON.stringify(previous.prospect));
     await dbPut(PRERESTORE_INTELLIGENCE_KEY, JSON.stringify(previous.intelligence));
     await dbPut(PRERESTORE_TARGET_KEY, JSON.stringify(previous.target));
+    try{
+      const wSnap = await exportWatchLifecycleBundleForBackup();
+      if(wSnap) await dbPut(PRERESTORE_WATCH_KEY, JSON.stringify(wSnap));
+    }catch(_we){}
     const nextData=normalizeData(_deepClone(parsed));
     await dbPut(RECORD_KEY, JSON.stringify(nextData));
     data=nextData;
@@ -691,6 +744,12 @@ async function _restoreParsedBackup(parsed){
     const expected={data:_deepClone(nextData),prospect:parsed.prospectScout ? _deepClone(parsed.prospectScout) : previous.prospect,intelligence:parsed.intelligence ? _deepClone(parsed.intelligence) : previous.intelligence,target:{value:targetValue,localRaw:String(targetValue),dbRaw:targetValue}};
     const actual=await _readCurrentSemanticState();
     if(!_semanticStateEqual(actual,expected)) throw new Error('post-commit verification failed');
+    // Additive Watch Lifecycle restore (best-effort; not part of semantic journal equality)
+    try{
+      if(parsed.watchLifecycle){
+        await restoreWatchLifecycleBundleForBackup(parsed.watchLifecycle);
+      }
+    }catch(wErr){ console.warn('watchLifecycle restore skipped', wErr); }
     await dbDelete(RESTORE_JOURNAL_KEY);
     return true;
   }catch(e){
@@ -741,7 +800,14 @@ async function undoLastRestore(){
       await _restoreSnapshot(previous);
       const actual=await _readCurrentSemanticState();
       if(!_semanticStateEqual(actual,previous)) throw new Error('undo verification failed');
+      try{
+        const wSnap = await dbGet(PRERESTORE_WATCH_KEY);
+        if(wSnap && wSnap.value){
+          await restoreWatchLifecycleBundleForBackup(JSON.parse(wSnap.value));
+        }
+      }catch(_wu){}
       await dbDelete(RESTORE_JOURNAL_KEY); await dbDelete(PRERESTORE_KEY); await dbDelete(PRERESTORE_PROSPECT_KEY); await dbDelete(PRERESTORE_INTELLIGENCE_KEY); await dbDelete(PRERESTORE_TARGET_KEY);
+      try{ await dbDelete(PRERESTORE_WATCH_KEY); }catch(_wd){}
       render(); showToast('به حالت قبل از بازیابی برگشت');
     }catch(e){
       try{ await _restoreSnapshot(current); const actual=await _readCurrentSemanticState(); if(!_semanticStateEqual(actual,current)) throw new Error('undo rollback verification failed'); await dbDelete(RESTORE_JOURNAL_KEY); }catch(re){ console.error('CRITICAL undo rollback incomplete',re); throw new Error('بازگردانی Undo کامل نشد؛ برنامه را دوباره باز کنید.'); }
@@ -775,6 +841,8 @@ async function autoBackupTick(){
   if(prospect) payload.prospectScout = prospect;
   const intelligence = await exportIntelligenceBundle();
   if(intelligence) payload.intelligence = intelligence;
+  const watchLifecycle = await exportWatchLifecycleBundleForBackup();
+  if(watchLifecycle) payload.watchLifecycle = watchLifecycle;
   if(!validateBackupShape(payload)) throw new Error('auto backup payload validation failed');
   await dbPut(key, JSON.stringify(payload));
   list.push({key, ts});
