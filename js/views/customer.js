@@ -109,6 +109,142 @@
      business logic) is shown alongside the new Watch list. This is an
      explicitly reported interpretation, not a silent guess. No action
      buttons are added for either list. */
+  /* ============================================================
+     PRODUCT REJECTION INSIGHT (UI-only, read-only)
+     Source: customerBehavior(cid).offeredProductStats
+     Not a Watch / Alert / Score / Recommendation / Action.
+     Threshold configurable via localStorage key below.
+     ============================================================ */
+  var PRODUCT_REJECTION_THRESHOLD_KEY = 'baqeri_product_rejection_threshold_v1';
+  var PRODUCT_REJECTION_THRESHOLD_DEFAULT = 3;
+
+  function getProductRejectionThreshold() {
+    try {
+      if (typeof localStorage !== 'undefined' && localStorage) {
+        var raw = localStorage.getItem(PRODUCT_REJECTION_THRESHOLD_KEY);
+        if (raw != null && raw !== '') {
+          var n = Number(raw);
+          if (Number.isFinite(n) && n >= 1) return Math.floor(n);
+        }
+      }
+    } catch (e) { /* ignore */ }
+    return PRODUCT_REJECTION_THRESHOLD_DEFAULT;
+  }
+
+  function setProductRejectionThreshold(value) {
+    var n = Math.floor(Number(value));
+    if (!Number.isFinite(n) || n < 1) n = PRODUCT_REJECTION_THRESHOLD_DEFAULT;
+    try {
+      if (typeof localStorage !== 'undefined' && localStorage) {
+        localStorage.setItem(PRODUCT_REJECTION_THRESHOLD_KEY, String(n));
+      }
+    } catch (e) { /* ignore */ }
+    return n;
+  }
+
+  var REJECTION_REASON_LABELS = {
+    price: 'قیمت',
+    quality: 'کیفیت',
+    competitor: 'رقیب',
+    unavailable: 'ناموجود',
+    no_need: 'عدم نیاز',
+    other: 'سایر'
+  };
+
+  function rejectionReasonLabel(code) {
+    if (!code) return '—';
+    return REJECTION_REASON_LABELS[code] || String(code);
+  }
+
+  /**
+   * Build rejection insights for ONE customer from offeredProductStats.
+   * Only products with rejectedCount >= threshold are returned.
+   * Pure / read-only — does not write DB or mutate CRM.
+   */
+  function buildProductRejectionInsights(customerId, threshold) {
+    var out = [];
+    if (!customerId || typeof customerBehavior !== 'function') return out;
+    var thr = (threshold != null && Number.isFinite(Number(threshold)))
+      ? Math.floor(Number(threshold))
+      : getProductRejectionThreshold();
+    if (thr < 1) thr = PRODUCT_REJECTION_THRESHOLD_DEFAULT;
+
+    var b;
+    try { b = customerBehavior(customerId); } catch (e) { return out; }
+    if (!b || !Array.isArray(b.offeredProductStats)) return out;
+
+    for (var i = 0; i < b.offeredProductStats.length; i++) {
+      var st = b.offeredProductStats[i];
+      if (!st || st.productId == null) continue;
+      var rejected = Number(st.rejectedCount) || 0;
+      var offered = Number(st.offeredCount) || 0;
+      if (rejected < thr) continue; // 1st and 2nd never shown
+      if (offered < 1) continue;
+
+      var ratio = rejected / offered;
+      var topReason = st.topRejectionReason || null;
+      // Deterministic fallback if stats omit top reason but expose reasonCounts
+      if (!topReason && st.reasonCounts && typeof st.reasonCounts === 'object') {
+        var bestCode = null;
+        var bestN = -1;
+        var codes = Object.keys(st.reasonCounts).sort(); // deterministic tie-break
+        for (var c = 0; c < codes.length; c++) {
+          var n = Number(st.reasonCounts[codes[c]]) || 0;
+          if (n > bestN) { bestN = n; bestCode = codes[c]; }
+        }
+        topReason = bestCode;
+      }
+
+      var name = st.productName || null;
+      if (!name && typeof data !== 'undefined' && Array.isArray(data.products)) {
+        var p = data.products.find(function (x) { return x && x.id === st.productId; });
+        if (p) name = p.name;
+      }
+
+      out.push({
+        productId: st.productId,
+        productName: name || String(st.productId),
+        offeredCount: offered,
+        rejectedCount: rejected,
+        rejectionRatio: ratio,
+        topRejectionReason: topReason,
+        lastOfferedDate: st.lastOfferedDate || null
+      });
+    }
+
+    // Sort: most rejections first, then name (deterministic)
+    out.sort(function (a, b) {
+      if (b.rejectedCount !== a.rejectedCount) return b.rejectedCount - a.rejectedCount;
+      return String(a.productName || '').localeCompare(String(b.productName || ''), 'fa');
+    });
+    return out;
+  }
+
+  function productRejectionInsightsHtml(customerId) {
+    var items = [];
+    try {
+      items = buildProductRejectionInsights(customerId);
+    } catch (e) {
+      return '';
+    }
+    if (!items.length) return ''; // rule 15: hide section entirely
+
+    var rows = items.map(function (it) {
+      var reasonTxt = it.topRejectionReason
+        ? ('دلیل غالب: ' + rejectionReasonLabel(it.topRejectionReason))
+        : 'دلیل غالب: —';
+      return '<div class="ledger-row" style="cursor:default;">' +
+        '<span class="name">' + esc(it.productName) +
+          '<span class="sub">' + reasonTxt + '</span></span>' +
+        '<span class="filler"></span>' +
+        '<span class="amount" style="font-size:.85rem;font-weight:600;">' +
+          esc(String(it.rejectedCount)) + ' بار رد شده</span></div>';
+    }).join('');
+
+    return '<h3 class="sub-title">کالاهای ردشده توسط مشتری</h3>' +
+      '<div class="dash-activity" style="margin-bottom:14px;">' + rows + '</div>';
+  }
+
   function intelligenceWatchHtml(cid) {
     if (typeof extractCustomerSignals !== 'function' && typeof extractWatchObservations !== 'function' && typeof getActiveWatchOccurrences !== 'function') return '';
 
@@ -660,6 +796,7 @@
       ' ت</div></div>' +
       '</div>' +
       behaviorHtml +
+      productRejectionInsightsHtml(c.id) +
       '<h3 class="sub-title">عملیات سریع</h3>' +
       '<div class="btn-row" style="margin-bottom:16px;">' +
       '<button type="button" class="btn small" id="act-invoice">ثبت فاکتور</button>' +
@@ -761,4 +898,9 @@
   }
 
   global.CustomerView = { mount: mount, unmount: function () {} };
+  // Test / settings seams for Product Rejection Insight (UI-only)
+  global.getProductRejectionThreshold = getProductRejectionThreshold;
+  global.setProductRejectionThreshold = setProductRejectionThreshold;
+  global.buildProductRejectionInsights = buildProductRejectionInsights;
+
 })(typeof window !== 'undefined' ? window : this);
