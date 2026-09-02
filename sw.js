@@ -8,7 +8,7 @@
 'use strict';
 
 /* CHANGED: v31 -> v32 (UI polish: font path, iOS chrome/keyboard fixes) */
-const CACHE_NAME = 'baqeri-shell-v33';
+const CACHE_NAME = 'baqeri-shell-v32';
 
 /** App Shell — paths relative to this SW (same directory as index.html). */
 const PRECACHE_URLS = [
@@ -19,17 +19,6 @@ const PRECACHE_URLS = [
   './js/db.js',
   './js/location.js',
   './js/calc.js',
-  './js/reason_codes.js',
-  './js/intelligence/persistence.js',
-  './js/intelligence/feedback.js',
-  './js/intelligence/baseline_manager.js',
-  './js/intelligence/seasonality.js',
-  './js/intelligence/interpretation.js',
-  './js/intelligence/signals.js',
-  './js/intelligence/sku_intelligence.js',
-  './js/intelligence/risk.js',
-  './js/intelligence/priority.js',
-  './js/intelligence/action.js',
   './js/stock.js',
   './js/payments.js',
   './js/backup.js',
