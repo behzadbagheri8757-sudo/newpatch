@@ -358,6 +358,18 @@ function _normalizeBackupEnvelope(parsed){
   if(parsed.intelligence == null && _isPlainObject(parsed.intelligenceState)){
     parsed.intelligence = parsed.intelligenceState;
   }
+  // Older Intelligence envelopes used `version`; current export uses `dbVersion`.
+  // Align shape so post-commit verification (exportIntelligenceBundle) does not
+  // false-negative on otherwise valid restores.
+  if(_isPlainObject(parsed.intelligence)){
+    var intel = parsed.intelligence;
+    if(intel.dbVersion == null && intel.version != null){
+      intel.dbVersion = Number(intel.version);
+    }
+    if(Object.prototype.hasOwnProperty.call(intel, 'version')){
+      delete intel.version;
+    }
+  }
   return parsed;
 }
 
