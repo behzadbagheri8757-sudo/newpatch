@@ -2939,10 +2939,18 @@ function openSupplierDetail(sid){
           <div class="field"><label>تاریخ برگشت</label>${shamsiDateInputHTML('f-ret-date', todayISO())}</div>
           <div id="ret-item-rows">
           ${p.items.map(it=>{
-            const remLineQty = purchaseLineRemainingQty(p, it.id);
+            const remLineQty = (typeof purchaseLineActualReturnableQty === 'function')
+              ? purchaseLineActualReturnableQty(p, it.id)
+              : purchaseLineRemainingQty(p, it.id);
+            if(remLineQty<=0){
+              return `<div class="field" style="opacity:.55;">
+              <label>${esc(it.name)} (خریداری‌شده: ${it.qty} — ۰ قابل‌برگشت؛ موجودی این خرید مصرف شده)</label>
+              <input class="ret-item-qty" data-item-id="${it.id}" data-product-id="${it.productId}" data-unit-cost="${it.unitCost}" data-max="0" type="text" inputmode="decimal" disabled>
+            </div>`;
+            }
             return `<div class="field">
               <label>${esc(it.name)} (خریداری‌شده: ${it.qty}، حداکثر قابل‌برگشت: ${remLineQty})</label>
-              <input class="ret-item-qty" data-item-id="${it.id}" data-product-id="${it.productId}" data-unit-cost="${it.unitCost}" data-max="${remLineQty}" type="text" inputmode="decimal" placeholder="تعداد برگشتی (اختیاری)" ${remLineQty<=0?'disabled':''}>
+              <input class="ret-item-qty" data-item-id="${it.id}" data-product-id="${it.productId}" data-unit-cost="${it.unitCost}" data-max="${remLineQty}" type="text" inputmode="decimal" placeholder="تعداد برگشتی (اختیاری)">
             </div>`;
           }).join('')}
           </div>
@@ -3011,13 +3019,20 @@ function openSupplierDetail(sid){
         });
         return;
       }
+      // G4: single-item max = actual returnable (accounting ∩ FIFO ∩ stock), same as SPA
+      const remainingQtyActual = (typeof purchaseActualReturnableQty === 'function')
+        ? purchaseActualReturnableQty(p)
+        : remainingQty;
       openSheet(`
         <h3>برگشت خرید از ${esc(s.name)}</h3>
         <div class="empty" style="padding:0 0 8px;text-align:right;">${faDate(p.date)}${p.productId?` — ${esc((data.products.find(x=>x.id===p.productId)||{}).name||'')}`:''}${retLinesLabel} — مبلغ کل: ${toman(p.amount)} ت${p.productId?` (${p.qty})`:''}${returnedAmountSoFar>0?` — قبلاً برگشت‌شده: ${toman(returnedAmountSoFar)} ت`:''}</div>
         <div class="field"><label>تاریخ برگشت</label>${shamsiDateInputHTML('f-ret-date', todayISO())}</div>
-        ${p.productId?`<div class="field"><label>مقدار برگشتی (حداکثر ${remainingQty})</label><input id="f-ret-qty" type="text" inputmode="decimal"></div>`:''}
-        <div class="field"><label>مبلغ برگشتی (تومان، حداکثر ${toman(remainingAmount)})</label><input id="f-ret-amount" type="text" inputmode="decimal"></div>
-        <div class="btn-row"><button class="btn" id="save-return">ثبت برگشت</button></div>
+        ${p.productId?(remainingQtyActual>0
+          ?`<div class="field"><label>مقدار برگشتی (حداکثر ${remainingQtyActual})</label><input id="f-ret-qty" type="text" inputmode="decimal"></div>`
+          :`<div class="empty" style="padding:8px 0;text-align:right;">موجودی قابل‌برگشت از این خرید: ۰ (همه مصرف/فروخته شده)</div>`)
+          :''}
+        <div class="field"><label>مبلغ برگشتی (تومان، حداکثر ${toman(remainingAmount)})</label><input id="f-ret-amount" type="text" inputmode="decimal" ${p.productId&&remainingQtyActual<=0?'disabled':''}></div>
+        <div class="btn-row"><button class="btn" id="save-return" ${p.productId&&remainingQtyActual<=0?'disabled':''}>ثبت برگشت</button></div>
       `);
       if(p.productId){
         document.getElementById('f-ret-qty').addEventListener('input', ()=>{
@@ -3033,7 +3048,9 @@ function openSupplierDetail(sid){
         if(amount<=0){ showToast('مبلغ برگشتی رو وارد کن'); throw new Error('validation'); }
         if(p.productId && qty<=0){ showToast('مقدار برگشتی رو وارد کن'); throw new Error('validation'); }
         // اعتبارسنجی یکسان با helper مشترک (تک‌قلمی و چندقلمی)
-        const liveRemainingQty = purchaseReturnRemainingQty(p);
+        const liveRemainingQty = (typeof purchaseActualReturnableQty === 'function' && p.productId)
+          ? purchaseActualReturnableQty(p)
+          : purchaseReturnRemainingQty(p);
         const liveRemainingAmount = purchaseReturnRemainingAmount(p);
         if(qty>0 && qty>liveRemainingQty){
           alert('مقدار برگشتی از باقیمانده‌ی قابل‌برگشت این خرید بیشتره.\n\nباقیمانده قابل‌برگشت: '+liveRemainingQty);
