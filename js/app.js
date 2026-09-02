@@ -1349,159 +1349,279 @@ function bindNoPurchasePrompt(cid){
   });
 }
 
-/* Phase 1 UX patch — sequential one-tap visit capture.
-   Same data model as before (VISIT_RESULTS/REASONS/NEXT_ACTIONS, visit.reason/
-   opportunity/threat/nextAction/tags/note): only the interaction changed.
-   Result → tap → the one relevant next question appears → tap → finish.
-   Opportunity/threat stay in the data model (still read by customer.js /
-   visits.js display code) but are no longer asked in this quick flow — they
-   are optional "observation" fields, not required for any calculation, so
-   dropping them from the fast path loses no business logic. */
+/* G1–G3 Visit capture: one-active-question cards.
+   Card1 Result → Card2 Product (direct chips) → Card3 Reaction →
+   (if rejected) Card4 Rejection reason → Card «محصول دیگری؟».
+   offeredProducts only stores complete entries (product + reaction;
+   rejected requires rejectionReason). Partial in-progress product is dropped
+   on Save & Finish. Backward-compatible: old visits without offeredProducts OK.
+   Does not touch invoice/stock/FIFO. */
 function openAddVisit(cid){
-  const nprCandidates = getNoPurchaseCandidates(cid, null, 3);
-  const nprHtml = noPurchasePromptHtml(nprCandidates, 'visit', 'این مشتری معمولاً این محصول را می‌خرد — علت عدم خرید؟');
-
   const RESULT_CHIPS = [
     { value: VISIT_RESULTS[0], label: 'سفارش گرفته شد' },
     { value: VISIT_RESULTS[1], label: 'سفارش گرفته نشد' },
     { value: VISIT_RESULTS[2], label: 'بسته بود' },
     { value: VISIT_RESULTS[3], label: 'سرکشی' },
   ];
+  const REACTION_CHIPS = [
+    { value: 'accepted', label: 'قبول کرد' },
+    { value: 'rejected', label: 'رد کرد' },
+    { value: 'deferred', label: 'بعداً تصمیم می‌گیرد' },
+  ];
+  const REJECTION_REASON_CHIPS = [
+    { value: 'price', label: 'قیمت' },
+    { value: 'quality', label: 'کیفیت' },
+    { value: 'competitor', label: 'رقیب' },
+    { value: 'unavailable', label: 'موجود نبود' },
+    { value: 'no_need', label: 'نیاز نداشت' },
+    { value: 'other', label: 'سایر' },
+  ];
+
+  const activeProducts = (data.products || []).filter(function (p) {
+    return p && p.active !== false && p.id;
+  });
+
   function chipBtn(group, value, label){
-    return `<button type="button" class="chip-opt" data-vgroup="${esc(group)}" data-value="${esc(value)}">${esc(label)}</button>`;
+    return '<button type="button" class="chip-opt" data-vgroup="' + esc(group) + '" data-value="' + esc(value) + '">' + esc(label) + '</button>';
   }
 
-  openSheet(`
-    <h3>ثبت ویزیت</h3>
-    <div style="display:flex;gap:8px;">
-      <div class="field" style="flex:1;"><label>تاریخ</label>${shamsiDateInputHTML('f-date', todayISO())}</div>
-      <div class="field" style="flex:1;"><label>ساعت</label><input id="f-time" type="time" value="${nowHHMM()}"></div>
-    </div>
+  openSheet(
+    '<h3>ثبت ویزیت</h3>' +
+    '<div style="display:flex;gap:8px;">' +
+      '<div class="field" style="flex:1;"><label>تاریخ</label>' + shamsiDateInputHTML('f-date', todayISO()) + '</div>' +
+      '<div class="field" style="flex:1;"><label>ساعت</label><input id="f-time" type="time" value="' + nowHHMM() + '"></div>' +
+    '</div>' +
+    '<div id="visit-card-stage" class="visit-card-stage" aria-live="polite"></div>' +
+    '<div class="field" style="margin-top:12px;"><label>یادداشت کوتاه (اختیاری)</label><input id="f-visit-note" placeholder="اختیاری" autocomplete="off"></div>' +
+    '<div class="btn-row" style="margin-top:8px;">' +
+      '<button type="button" class="btn" id="save-visit">ثبت و پایان</button>' +
+    '</div>'
+  );
 
-    <div class="q-block">
-      <div class="q-title">نتیجه ویزیت</div>
-      <div class="chip-wrap">${RESULT_CHIPS.map(o=>chipBtn('result', o.value, o.label)).join('')}</div>
-    </div>
+  const state = {
+    result: null,
+    offeredProducts: [], // complete only
+    pendingProductId: null,
+    pendingReaction: null,
+    step: 'result', // result | product | reaction | rejectReason | another | done
+  };
+  const stage = document.getElementById('visit-card-stage');
 
-    <div class="q-block" id="visit-q-reason" style="display:none;">
-      <div class="q-title">چرا سفارش نگرفت؟</div>
-      <div class="chip-wrap">${VISIT_REASONS.map(r=>chipBtn('reason', r, r)).join('')}</div>
-    </div>
-
-    <div id="visit-npr-wrap" style="display:none;">${nprHtml}</div>
-
-    <div class="q-block" id="visit-q-next" style="display:none;">
-      <div class="q-title">اقدام بعدی؟</div>
-      <div class="chip-wrap">${VISIT_NEXT_ACTIONS.map(r=>chipBtn('next', r, r)).join('')}</div>
-    </div>
-
-    <div id="visit-final" style="display:none;">
-      <div class="field"><label>یادداشت کوتاه (اختیاری)</label><input id="f-visit-note" placeholder="اختیاری" autocomplete="off"></div>
-      <div class="field" id="visit-tags-field"><label>برچسب‌ها (اختیاری، با ویرگول جدا کنید)</label><input id="f-visit-tags" placeholder="مثال: قیمت‌حساس، رقیب‌فعال" autocomplete="off"></div>
-      <div class="btn-row"><button class="btn" id="save-visit">ثبت ویزیت</button></div>
-    </div>
-  `);
-  bindNoPurchasePrompt(cid);
-
-  const state = { result: null, reason: null, nextAction: null };
-  const root = document.getElementById('modalRoot');
-  const qReason = document.getElementById('visit-q-reason');
-  const nprWrap = document.getElementById('visit-npr-wrap');
-  const qNext = document.getElementById('visit-q-next');
-  const final = document.getElementById('visit-final');
-  const tagsField = document.getElementById('visit-tags-field');
-
-  function selectChip(group, value){
-    root.querySelectorAll(`.chip-opt[data-vgroup="${group}"]`).forEach(btn=>{
-      btn.classList.toggle('selected', btn.getAttribute('data-value') === value);
+  function validOffered(){
+    return (state.offeredProducts || []).filter(function (op) {
+      if (!op || !op.productId) return false;
+      if (op.reaction !== 'accepted' && op.reaction !== 'rejected' && op.reaction !== 'deferred') return false;
+      if (op.reaction === 'rejected' && !op.rejectionReason) return false;
+      return true;
     });
   }
-  function hide(el){ if(el) el.style.display = 'none'; }
-  function show(el, disp){ if(el) el.style.display = disp || 'block'; }
 
-  function showFinal(withTags){
-    tagsField.style.display = withTags ? '' : 'none';
-    show(final);
+  function productLabel(pid){
+    const p = (data.products || []).find(function (x) { return x.id === pid; });
+    return p ? (p.name || '—') : '—';
   }
 
-  root.querySelectorAll('.chip-opt[data-vgroup="result"]').forEach(btn=>{
-    btn.addEventListener('click', ()=>{
-      const value = btn.getAttribute('data-value');
-      state.result = value; state.reason = null; state.nextAction = null;
-      selectChip('result', value);
-      hide(qReason); hide(nprWrap); hide(qNext); hide(final);
-      if(value === VISIT_RESULTS[0]){ // سفارش گرفته شد
-        showFinal(true);
-      } else if(value === VISIT_RESULTS[1]){ // سفارش گرفته نشد
-        show(qReason);
-        if(nprCandidates.length) show(nprWrap);
-      } else if(value === VISIT_RESULTS[2]){ // فروشگاه بسته بود
-        showFinal(false);
-      } else { // فقط بازدید/سرکشی
-        showFinal(false);
-      }
-    });
-  });
-  root.querySelectorAll('.chip-opt[data-vgroup="reason"]').forEach(btn=>{
-    btn.addEventListener('click', ()=>{
-      const value = btn.getAttribute('data-value');
-      state.reason = value; state.nextAction = null;
-      selectChip('reason', value);
-      hide(final);
-      show(qNext);
-    });
-  });
-  root.querySelectorAll('.chip-opt[data-vgroup="next"]').forEach(btn=>{
-    btn.addEventListener('click', ()=>{
-      const value = btn.getAttribute('data-value');
-      state.nextAction = value;
-      selectChip('next', value);
-      showFinal(true);
-    });
-  });
+  function renderStage(){
+    if (!stage) return;
+    let html = '';
+    const step = state.step;
 
-  document.getElementById('save-visit').addEventListener('click', async (e)=>{
-    await withSubmitGuard(e.currentTarget, async ()=>{
-      const c = data.customers.find(x=>x.id===cid);
-      if(!c){ showToast('مشتری پیدا نشد'); return; }
-      if(!state.result){ showToast('نتیجه ویزیت را انتخاب کنید'); return; }
-      const date = document.getElementById('f-date').value || todayISO();
-      const time = document.getElementById('f-time').value || nowHHMM();
-      const noteEl = document.getElementById('f-visit-note');
-      const note = noteEl ? (noteEl.value || '').trim() : '';
-      const tagsEl = document.getElementById('f-visit-tags');
-      let tags = [];
-      if(tagsField.style.display !== 'none' && tagsEl && tagsEl.value){
-        tags = String(tagsEl.value).split(/[,،]/).map(t=>t.trim()).filter(Boolean);
-      }
-      const visit = {
-        id: uid(),
-        date,
-        time,
-        result: state.result,
-        ordered: state.result === VISIT_RESULTS[0],
-      };
-      if(note) visit.note = note;
-      if(state.reason) visit.reason = state.reason;
-      if(state.nextAction) visit.nextAction = state.nextAction;
-      if(tags.length) visit.tags = tags;
-      c.visits = c.visits || [];
-      c.visits.push(visit);
-      await saveData();
-      // Game Center hook (derived only — never rolls back CRM)
-      if (typeof gameOnCustomerVisit === 'function') {
-        try {
-          await gameOnCustomerVisit(cid, visit.id, visit.date);
-        } catch (e) {
-          console.warn('Game hook failed:', e);
+    if (step === 'result') {
+      html =
+        '<div class="visit-card visit-card-enter" data-visit-step="result">' +
+          '<div class="q-title">نتیجه ویزیت؟</div>' +
+          '<div class="chip-wrap">' + RESULT_CHIPS.map(function (o) {
+            return chipBtn('result', o.value, o.label);
+          }).join('') + '</div>' +
+        '</div>';
+    } else if (step === 'product') {
+      const chosen = {};
+      (state.offeredProducts || []).forEach(function (op) { chosen[op.productId] = true; });
+      const avail = activeProducts.filter(function (p) { return !chosen[p.id]; });
+      html =
+        '<div class="visit-card visit-card-enter" data-visit-step="product">' +
+          '<div class="q-title">چه محصولی پیشنهاد/بررسی شد؟</div>' +
+          (avail.length
+            ? '<div class="chip-wrap">' + avail.map(function (p) {
+                return chipBtn('product', p.id, p.name || '—');
+              }).join('') + '</div>'
+            : '<div class="empty" style="padding:12px 0;">همه محصولات فعال قبلاً ثبت شدند یا کالایی نیست.</div>') +
+        '</div>';
+    } else if (step === 'reaction') {
+      html =
+        '<div class="visit-card visit-card-enter" data-visit-step="reaction">' +
+          '<div class="q-title">واکنش مشتری؟ <span class="sub" style="display:inline;font-weight:500;">(' + esc(productLabel(state.pendingProductId)) + ')</span></div>' +
+          '<div class="chip-wrap">' + REACTION_CHIPS.map(function (o) {
+            return chipBtn('reaction', o.value, o.label);
+          }).join('') + '</div>' +
+        '</div>';
+    } else if (step === 'rejectReason') {
+      html =
+        '<div class="visit-card visit-card-enter" data-visit-step="rejectReason">' +
+          '<div class="q-title">چرا نخرید؟ <span class="sub" style="display:inline;font-weight:500;">(' + esc(productLabel(state.pendingProductId)) + ')</span></div>' +
+          '<div class="chip-wrap">' + REJECTION_REASON_CHIPS.map(function (o) {
+            return chipBtn('rejectReason', o.value, o.label);
+          }).join('') + '</div>' +
+        '</div>';
+    } else if (step === 'another') {
+      html =
+        '<div class="visit-card visit-card-enter" data-visit-step="another">' +
+          '<div class="q-title">محصول دیگری هم مطرح شد؟</div>' +
+          '<div class="chip-wrap">' +
+            chipBtn('another', 'yes', 'بله') +
+            chipBtn('another', 'no', 'خیر') +
+          '</div>' +
+        '</div>';
+    } else if (step === 'done') {
+      const n = validOffered().length;
+      html =
+        '<div class="visit-card visit-card-enter" data-visit-step="done">' +
+          '<div class="q-title">آماده ثبت</div>' +
+          '<div class="empty" style="padding:8px 0;text-align:right;">' +
+            (state.result ? ('نتیجه: ' + esc(state.result) + '<br>') : '') +
+            (n ? (n + ' محصول با واکنش کامل ثبت می‌شود.') : 'بدون محصول پیشنهادی (اختیاری).') +
+            '<br>برای ذخیره روی «ثبت و پایان» بزنید.' +
+          '</div>' +
+        '</div>';
+    }
+
+    stage.innerHTML = html;
+    bindStageChips();
+  }
+
+  function bindStageChips(){
+    if (!stage) return;
+    stage.querySelectorAll('.chip-opt').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        const group = btn.getAttribute('data-vgroup');
+        const value = btn.getAttribute('data-value');
+        if (!group || value == null) return;
+
+        if (group === 'result') {
+          state.result = value;
+          state.pendingProductId = null;
+          state.pendingReaction = null;
+          state.step = 'product';
+          renderStage();
+          return;
         }
+        if (group === 'product') {
+          state.pendingProductId = value;
+          state.pendingReaction = null;
+          state.step = 'reaction';
+          renderStage();
+          return;
+        }
+        if (group === 'reaction') {
+          state.pendingReaction = value;
+          if (value === 'rejected') {
+            state.step = 'rejectReason';
+            renderStage();
+            return;
+          }
+          if (state.pendingProductId && (value === 'accepted' || value === 'deferred')) {
+            state.offeredProducts.push({
+              productId: state.pendingProductId,
+              reaction: value,
+            });
+          }
+          state.pendingProductId = null;
+          state.pendingReaction = null;
+          state.step = 'another';
+          renderStage();
+          return;
+        }
+        if (group === 'rejectReason') {
+          if (state.pendingProductId && state.pendingReaction === 'rejected' && value) {
+            state.offeredProducts.push({
+              productId: state.pendingProductId,
+              reaction: 'rejected',
+              rejectionReason: value,
+            });
+          }
+          state.pendingProductId = null;
+          state.pendingReaction = null;
+          state.step = 'another';
+          renderStage();
+          return;
+        }
+        if (group === 'another') {
+          if (value === 'yes') {
+            state.pendingProductId = null;
+            state.pendingReaction = null;
+            state.step = 'product';
+            renderStage();
+            return;
+          }
+          state.step = 'done';
+          renderStage();
+          persistVisit(true);
+          return;
+        }
+      });
+    });
+  }
+
+  async function persistVisit(auto){
+    const c = data.customers.find(function (x) { return x.id === cid; });
+    if (!c) {
+      showToast('مشتری پیدا نشد');
+      return false;
+    }
+    if (!state.result) {
+      showToast('نتیجه ویزیت را انتخاب کنید');
+      return false;
+    }
+    const dateEl = document.getElementById('f-date');
+    const timeEl = document.getElementById('f-time');
+    const noteEl = document.getElementById('f-visit-note');
+    const date = (dateEl && dateEl.value) || todayISO();
+    const time = (timeEl && timeEl.value) || nowHHMM();
+    const note = noteEl ? String(noteEl.value || '').trim() : '';
+
+    const offered = validOffered();
+
+    const visit = {
+      id: uid(),
+      date: date,
+      time: time,
+      result: state.result,
+      ordered: state.result === VISIT_RESULTS[0],
+    };
+    if (note) visit.note = note;
+    if (offered.length) visit.offeredProducts = offered;
+
+    c.visits = c.visits || [];
+    c.visits.push(visit);
+    try {
+      await saveData();
+    } catch (e) {
+      console.error(e);
+      showToast('ذخیره نشد');
+      return false;
+    }
+    if (typeof gameOnCustomerVisit === 'function') {
+      try {
+        await gameOnCustomerVisit(cid, visit.id, visit.date);
+      } catch (e) {
+        console.warn('Game hook failed:', e);
       }
-      closeModal();
-      if(typeof openCustomerDetail === 'function') openCustomerDetail(cid);
-      if(typeof render === 'function') render();
-      showToast('ویزیت ثبت شد');
+    }
+    closeModal();
+    if (typeof openCustomerDetail === 'function') openCustomerDetail(cid);
+    if (typeof ViewHost !== 'undefined' && ViewHost.refreshCurrent) ViewHost.refreshCurrent();
+    else if (typeof render === 'function') render();
+    showToast('ویزیت ثبت شد');
+    return true;
+  }
+
+  document.getElementById('save-visit').addEventListener('click', function (e) {
+    withSubmitGuard(e.currentTarget, function () {
+      return persistVisit(false);
     });
   });
+
+  renderStage();
 }
 
 function openCustomerDetail(cid){
