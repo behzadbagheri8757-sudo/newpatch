@@ -182,14 +182,15 @@
       if (offered < 1) continue;
 
       var ratio = rejected / offered;
-      var topReason = st.topRejectionReason || null;
-      // Deterministic fallback if stats omit top reason but expose reasonCounts
-      if (!topReason && st.reasonCounts && typeof st.reasonCounts === 'object') {
+      // Contract from calc.js: use st.rejectionReasons only (not topRejectionReason/reasonCounts)
+      var topReason = null;
+      if (st.rejectionReasons && typeof st.rejectionReasons === 'object') {
         var bestCode = null;
         var bestN = -1;
-        var codes = Object.keys(st.reasonCounts).sort(); // deterministic tie-break
+        var codes = Object.keys(st.rejectionReasons).sort(); // alphabetical deterministic tie-break
         for (var c = 0; c < codes.length; c++) {
-          var n = Number(st.reasonCounts[codes[c]]) || 0;
+          var n = Number(st.rejectionReasons[codes[c]]);
+          if (!Number.isFinite(n) || n <= 0) continue;
           if (n > bestN) { bestN = n; bestCode = codes[c]; }
         }
         topReason = bestCode;
