@@ -285,6 +285,13 @@
                 data = previousData;
                 throw saveErr;
               }
+              if (typeof gameOnInvoiceDeleted === 'function') {
+                try {
+                  await gameOnInvoiceDeleted(inv.id);
+                } catch (e) {
+                  console.warn('Game hook failed:', e);
+                }
+              }
               showToast('فاکتور حذف شد؛ موجودی و حساب مشتری اصلاح شد');
               navigateToInvoices();
             })().catch(function (err) {
