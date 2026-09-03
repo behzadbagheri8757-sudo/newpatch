@@ -62,17 +62,29 @@
 
     const stockList =
       products
+        .slice()
+        .sort(function (a, b) {
+          const aOff = a.active === false ? 1 : 0;
+          const bOff = b.active === false ? 1 : 0;
+          if (aOff !== bOff) return aOff - bOff;
+          return (a.name || '').localeCompare(b.name || '', 'fa');
+        })
         .map(function (p) {
           const st = invStatus(p);
           const val = (typeof productInventoryValue === 'function') ? productInventoryValue(p.id) : (Number(p.stockQty) || 0) * (Number(p.buy) || 0);
           const unit = p.packageWeight ? 'بسته ' + p.packageWeight : 'عدد';
           const qtyCls = (Number(p.stockQty) || 0) < 0 ? 'accent-red' : '';
+          const isOff = p.active === false;
+          const inactiveBadge = isOff ? ' <span class="badge pending">غیرفعال</span>' : '';
           return (
             '<div class="ledger-row" data-edit-product="' +
             esc(p.id) +
-            '" style="cursor:pointer;">' +
+            '" style="cursor:pointer;' +
+            (isOff ? 'opacity:.45;' : '') +
+            '">' +
             '<span class="name">' +
             esc(p.name) +
+            inactiveBadge +
             '<span class="sub">واحد: ' +
             esc(String(unit)) +
             ' — <span class="' +

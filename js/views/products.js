@@ -77,6 +77,12 @@
       rows.sort(function (a, b) {
         return (a.p.name || '').localeCompare(b.p.name || '', 'fa');
       });
+    // Inactive products remain visible but sort to the bottom (existing convention).
+    rows.sort(function (a, b) {
+      const aOff = a.p.active === false ? 1 : 0;
+      const bOff = b.p.active === false ? 1 : 0;
+      return aOff - bOff;
+    });
 
     if (!rows.length) {
       list.innerHTML =
@@ -92,11 +98,14 @@
           const st = x.st;
           const val = x.val;
           const unit = p.packageWeight ? 'بسته ' + p.packageWeight : 'عدد';
-          const inactive = p.active === false ? ' <span class="badge">غیرفعال</span>' : '';
+          const isOff = p.active === false;
+          const inactive = isOff ? ' <span class="badge pending">غیرفعال</span>' : '';
           return (
             '<div class="ledger-row" data-edit-product="' +
             esc(p.id) +
-            '" style="cursor:pointer;">' +
+            '" style="cursor:pointer;' +
+            (isOff ? 'opacity:.45;' : '') +
+            '">' +
             '<span class="name">' +
             esc(p.name) +
             inactive +
