@@ -1932,7 +1932,9 @@ function openInvoiceForm(cid, editInv){
 
   function productDropListHtml(idx, query){
     const q = (query||'').trim();
-    const list = (q ? data.products.filter(p=>(p.name||'').includes(q)) : data.products).slice(0, 40);
+    // Inactive products (active===false) excluded from NEW invoice product selector only.
+    const activeOnly = data.products.filter(p=>p.active!==false);
+    const list = (q ? activeOnly.filter(p=>(p.name||'').includes(q)) : activeOnly).slice(0, 40);
     if(!list.length) return `<div class="prod-drop-empty">کالایی پیدا نشد</div>`;
     return list.map(p=>`
       <div class="prod-drop-item" data-row="${idx}" data-pid="${esc(p.id)}">
@@ -2641,7 +2643,7 @@ function openSupplierDetail(sid){
           <label>کالای مرتبط (اختیاری — برای افزایش خودکار موجودی)</label>
           <select id="f-product">
             <option value="">— بدون کالای مشخص —</option>
-            ${data.products.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('')}
+            ${data.products.filter(p=>p.active!==false).map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('')}
           </select>
         </div>
         <div class="field"><label>تعداد کالا (در صورت انتخاب کالا)</label><input id="f-qty" type="text" inputmode="decimal"></div>
@@ -2652,7 +2654,7 @@ function openSupplierDetail(sid){
         <div class="field" style="display:flex;gap:6px;">
           <select id="mi-product" style="flex:2;">
             <option value="">انتخاب کالا</option>
-            ${data.products.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('')}
+            ${data.products.filter(p=>p.active!==false).map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('')}
           </select>
           <input id="mi-qty" type="text" inputmode="decimal" placeholder="تعداد" style="flex:1;">
           <input id="mi-price" type="text" inputmode="decimal" placeholder="قیمت واحد" style="flex:1;">

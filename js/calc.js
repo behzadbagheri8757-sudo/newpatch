@@ -749,8 +749,14 @@ function customerBehavior(cid){
       prodMap[key].revenue -= (ri.qty || 0) * (ri.price || 0);
     });
   });
+  // Exclude inactive products from CURRENT intelligence signals only (not historical data).
   const topProductsList = Object.values(prodMap)
     .filter(p => p.qty > 0.0001)
+    .filter(p => {
+      if(!p.productId) return true;
+      const prod = (data.products || []).find(x => x.id === p.productId);
+      return !prod || prod.active !== false;
+    })
     .sort((a,b)=> b.qty - a.qty)
     .slice(0, 5);
 
@@ -785,6 +791,11 @@ function customerBehavior(cid){
       const e = earlyMap[key].qty;
       const l = (lateMap[key] && lateMap[key].qty) || 0;
       if(e >= 2 && l < e * 0.6){
+        const pid = earlyMap[key].productId;
+        if(pid){
+          const prod = (data.products || []).find(x => x.id === pid);
+          if(prod && prod.active === false) return; // exclude inactive from CURRENT signals
+        }
         decliningProducts.push({
           name: earlyMap[key].name,
           productId: earlyMap[key].productId,
