@@ -770,7 +770,9 @@ function customerBehavior(cid){
       list.forEach(inv => (inv.items||[]).forEach(it=>{
         const key = it.productId || ('n:' + (it.name||''));
         if(!map[key]) map[key] = { productId: it.productId||null, name: it.name||'—', qty: 0 };
-        map[key].qty += (it.qty||0);
+        /* کشمش پلویی: نرمال‌سازی به تعداد بسته/کارتن تا رکوردهای قدیمی (qty=کیلوگرم)
+           و جدید (qty=تعداد بسته) قابل مقایسه باشند — رجوع کن به _raisinPilafPackages بالای فایل. */
+        map[key].qty += _isRaisinPilafItem(it, _raisinIdsForBehavior) ? _raisinPilafPackages(it) : (it.qty||0);
       }));
     }
     accSold(early, earlyMap);
