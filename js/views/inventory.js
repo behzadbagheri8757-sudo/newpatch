@@ -75,12 +75,18 @@
           const unit = p.packageWeight ? 'بسته ' + p.packageWeight : 'عدد';
           const qtyCls = (Number(p.stockQty) || 0) < 0 ? 'accent-red' : '';
           const isOff = p.active === false;
-          const inactiveBadge = isOff ? ' <span class="badge pending">غیرفعال</span>' : '';
+          // Visual-only: dim row + compact OFF badge. No behavior change.
+          const inactiveBadge = isOff
+            ? ' <span class="badge pending" style="display:inline-block;vertical-align:middle;font-size:.72em;padding:1px 7px;margin-right:4px;opacity:1;">غیرفعال</span>'
+            : '';
+          const offStyle = isOff
+            ? 'cursor:pointer;opacity:.42;filter:grayscale(.35);'
+            : 'cursor:pointer;';
           return (
             '<div class="ledger-row" data-edit-product="' +
             esc(p.id) +
-            '" style="cursor:pointer;' +
-            (isOff ? 'opacity:.45;' : '') +
+            '" style="' +
+            offStyle +
             '">' +
             '<span class="name">' +
             esc(p.name) +
