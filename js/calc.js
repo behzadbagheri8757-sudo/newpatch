@@ -543,7 +543,7 @@ function visitOverdueDays(cid){
 /* Valid rejection reason codes — mirrors REJECTION_REASON_CHIPS in app.js /
    the rr label map in views/visits.js & views/customer.js. Kept local to
    calc.js (read-only lookup only); not a new stored schema. */
-var _BEHAVIOR_VALID_REJECTION_REASONS = { price:1, quality:1, competitor:1, unavailable:1, no_need:1, other:1 };
+var _BEHAVIOR_VALID_REJECTION_REASONS = { price:1, quality:1, competitor:1, unavailable:1, no_need:1, other:1, still_stock:1 };
 
 /** Same date-diff mechanism as the avgIntervalDays block above (parseISODateParts,
  * falling back to new Date(iso) on parse failure) — no new timezone handling invented.
