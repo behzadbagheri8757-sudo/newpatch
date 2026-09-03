@@ -70,7 +70,7 @@ function invoiceEffectivePaid(inv){
   (data.payments||[]).forEach(p=>{
     if(p.customerId !== cid) return;
     if(p.invoiceId) return;
-    if(['cash','card','transfer','discount','return'].includes(p.method)) pool += (p.amount||0);
+    if(['cash','card','transfer','discount'].includes(p.method)) pool += (p.amount||0);
   });
   (data.checks||[]).forEach(c=>{
     if(c.customerId !== cid) return;
@@ -126,19 +126,57 @@ function customerProfit(cid){
       // previous "last sold" behavior only for legacy/account-only returns with no
       // linked invoice (payment.invoiceId missing), so old data keeps working.
       let sourceItem = null;
+      let buyCostTotal = 0;
+      let allocatedQty = 0;
       if(p.invoiceId){
         const srcInv = data.invoices.find(i=>i.id===p.invoiceId);
         if(srcInv){
-          sourceItem = (srcInv.items||[]).find(it=>it.productId===ri.productId) || null;
+          const items = (srcInv.items||[]).filter(it=>it.productId===ri.productId);
+          // Match stock.js return allocation order: all original FIFO allocations
+          // for this product, in invoice-line order, skipping previous returns.
+          const allocs = [];
+          items.forEach(it=>{
+            if(Array.isArray(it.costAllocations)) it.costAllocations.forEach(a=>{
+              const q=Number(a.qty)||0; const uc=Number(a.unitCost)||0;
+              if(q>0) allocs.push({qty:q, unitCost:uc});
+            });
+          });
+          if(allocs.length){
+            let skip=0;
+            for(const x of customerPayments(cid)){
+              if(x.method!=='return' || x.invoiceId!==p.invoiceId) continue;
+              if(x.id===p.id) break;
+              (x.returnItems||[]).forEach(xri=>{ if(xri.productId===ri.productId) skip += Number(xri.qty)||0; });
+            }
+            let need=Number(ri.qty)||0;
+            for(const a of allocs){
+              if(skip>=a.qty){ skip-=a.qty; continue; }
+              const take=Math.min(need, a.qty-skip);
+              if(take>0){ buyCostTotal += take*a.unitCost; allocatedQty += take; need -= take; }
+              skip=0;
+              if(need<=1e-9) break;
+            }
+          }
+          sourceItem = items[0] || null;
         }
       }
       if(!sourceItem){
         const sold = customerInvoices(cid).flatMap(inv=>inv.items.filter(it=>it.productId===ri.productId));
         sourceItem = sold.length ? sold[sold.length-1] : null;
       }
-      const buy = (sourceItem && sourceItem.buyPrice!==undefined) ? (sourceItem.buyPrice||0) : (prod ? (prod.buy||0) : 0);
-      const sell = (ri.price>0) ? ri.price : (sourceItem ? (sourceItem.price||0) : 0);
-      s -= (sell - buy) * ri.qty;
+      const qty=Number(ri.qty)||0;
+      const sell = (ri.price>0) ? Number(ri.price) : (sourceItem ? Number(sourceItem.price)||0 : 0);
+      if(allocatedQty>0){
+        const qtyForCost=Math.min(qty,allocatedQty);
+        s -= (sell * qtyForCost) - buyCostTotal;
+        if(qtyForCost < qty){
+          const fallbackBuy=(sourceItem && sourceItem.buyPrice!==undefined) ? (Number(sourceItem.buyPrice)||0) : (prod ? (Number(prod.buy)||0) : 0);
+          s -= (sell - fallbackBuy) * (qty-qtyForCost);
+        }
+      } else {
+        const buy=(sourceItem && sourceItem.buyPrice!==undefined) ? (Number(sourceItem.buyPrice)||0) : (prod ? (Number(prod.buy)||0) : 0);
+        s -= (sell - buy) * qty;
+      }
     });
   });
   // کسر تراکنش «تخفیف (کاهش بدهی)» از سود گزارش‌شده
@@ -841,17 +879,65 @@ function _ccReturnMarginForPayment(cid, p){
     if(!(Number(ri.qty)>0)) return;
     const prod = (data.products||[]).find(function(x){ return x.id===ri.productId; });
     let sourceItem = null;
+    let buyCostTotal = 0;
+    let allocatedQty = 0;
     if(p.invoiceId){
       const srcInv = (data.invoices||[]).find(function(i){ return i.id===p.invoiceId; });
-      if(srcInv) sourceItem = (srcInv.items||[]).find(function(it){ return it.productId===ri.productId; }) || null;
+      if(srcInv){
+        const items = (srcInv.items||[]).filter(function(it){ return it.productId===ri.productId; });
+        // Match customerProfit()/stock.js return allocation order: all original FIFO
+        // allocations for this product, in invoice-line order, skipping previous returns.
+        const allocs = [];
+        items.forEach(function(it){
+          if(Array.isArray(it.costAllocations)) it.costAllocations.forEach(function(a){
+            const q=Number(a.qty)||0; const uc=Number(a.unitCost)||0;
+            if(q>0) allocs.push({qty:q, unitCost:uc});
+          });
+        });
+        if(allocs.length){
+          let skip=0;
+          for(const x of customerPayments(cid)){
+            if(x.method!=='return' || x.invoiceId!==p.invoiceId) continue;
+            if(x.id===p.id) break;
+            (x.returnItems||[]).forEach(function(xri){
+              if(xri.productId===ri.productId) skip += Number(xri.qty)||0;
+            });
+          }
+          let need=Number(ri.qty)||0;
+          for(const a of allocs){
+            if(skip>=a.qty){ skip-=a.qty; continue; }
+            const take=Math.min(need, a.qty-skip);
+            if(take>0){
+              buyCostTotal += take*a.unitCost;
+              allocatedQty += take;
+              need -= take;
+            }
+            skip=0;
+            if(need<=1e-9) break;
+          }
+        }
+        sourceItem = items[0] || null;
+      }
     }
     if(!sourceItem){
-      const sold = customerInvoices(cid).flatMap(function(inv){ return (inv.items||[]).filter(function(it){ return it.productId===ri.productId; }); });
+      const sold = customerInvoices(cid).flatMap(function(inv){
+        return (inv.items||[]).filter(function(it){ return it.productId===ri.productId; });
+      });
       sourceItem = sold.length ? sold[sold.length-1] : null;
     }
-    const buy = sourceItem && sourceItem.buyPrice!==undefined ? (sourceItem.buyPrice||0) : (prod ? (prod.buy||0) : 0);
-    const sell = Number(ri.price)>0 ? Number(ri.price) : (sourceItem ? (sourceItem.price||0) : 0);
-    margin += (sell - buy) * Number(ri.qty);
+    const qty=Number(ri.qty)||0;
+    const sell = Number(ri.price)>0 ? Number(ri.price) : (sourceItem ? (Number(sourceItem.price)||0) : 0);
+    if(allocatedQty>0){
+      const qtyForCost=Math.min(qty,allocatedQty);
+      margin += (sell * qtyForCost) - buyCostTotal;
+      if(qtyForCost < qty){
+        const fallbackBuy=(sourceItem && sourceItem.buyPrice!==undefined) ? (Number(sourceItem.buyPrice)||0) : (prod ? (Number(prod.buy)||0) : 0);
+        margin += (sell - fallbackBuy) * (qty-qtyForCost);
+      }
+    } else {
+      const buy=(sourceItem && sourceItem.buyPrice!==undefined) ? (Number(sourceItem.buyPrice)||0) : (prod ? (Number(prod.buy)||0) : 0);
+      margin += (sell - buy) * qty;
+    }
   });
   return margin;
 }

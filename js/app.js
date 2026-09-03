@@ -1190,6 +1190,13 @@ function openEditStandalonePayment(cid, paymentId){
         data.payments=data.payments.filter(x=>x.id!==paymentId);
         await saveData();
       }catch(err){ data=previousData; throw err; }
+      if (typeof gameOnPaymentDeleted === 'function') {
+        try {
+          await gameOnPaymentDeleted(paymentId);
+        } catch (e) {
+          console.warn('Game hook failed:', e);
+        }
+      }
       openCustomerDetail(cid); render(); showToast('دریافت حذف شد');
     });
   });
@@ -1723,6 +1730,13 @@ function openCustomerDetail(cid){
         if(!confirm('این دریافت از حساب مشتری حذف شود؟')) throw new Error('validation');
         const previousData=JSON.parse(JSON.stringify(data));
         try{ data.payments=data.payments.filter(x=>x.id!==p.id); await saveData(); }catch(err){ data=previousData; throw err; }
+        if (typeof gameOnPaymentDeleted === 'function') {
+          try {
+            await gameOnPaymentDeleted(p.id);
+          } catch (e) {
+            console.warn('Game hook failed:', e);
+          }
+        }
         openCustomerDetail(cid); render(); showToast('دریافت حذف شد');
       });
     });

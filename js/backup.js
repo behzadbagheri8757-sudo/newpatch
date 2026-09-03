@@ -37,6 +37,8 @@ const PRERESTORE_INTELLIGENCE_KEY = 'preRestoreIntelligence';
 const PRERESTORE_TARGET_KEY = 'preRestoreSalesTarget';
 /** کلید اسنپ‌شات Watch Lifecycle قبل از Restore */
 const PRERESTORE_WATCH_KEY = 'preRestoreWatchLifecycle';
+/** کلید اسنپ‌شات Game Center قبل از Restore */
+const PRERESTORE_GAME_KEY = 'preRestoreGameState';
 
 /**
  * دسترسی مستقیم به ProspectScoutDB (بدون وابستگی به لود بودن prospect-db.js)
@@ -367,6 +369,47 @@ function _validateWatchLifecycleBundle(bundle){
   return true;
 }
 
+async function exportGameStateForBackup(){
+  try{
+    if(typeof gameLoadMeta !== 'function' || typeof gameLoadLedger !== 'function') return null;
+    const gameMeta = await gameLoadMeta();
+    const gameLedger = await gameLoadLedger();
+    return { gameMeta: _deepClone(gameMeta), gameLedger: _deepClone(gameLedger) };
+  }catch(e){
+    console.error('exportGameStateForBackup failed', e);
+    return null;
+  }
+}
+
+async function restoreGameStateForBackup(game){
+  if(!game || !_validateGameState(game.gameMeta, game.gameLedger)) throw new Error('Game Center state invalid');
+  const metaKey = (typeof GAME_CONFIG !== 'undefined' && GAME_CONFIG.storage && GAME_CONFIG.storage.metaKey) || 'gameMeta';
+  const ledgerKey = (typeof GAME_CONFIG !== 'undefined' && GAME_CONFIG.storage && GAME_CONFIG.storage.ledgerKey) || 'gameLedger';
+  await dbPut(metaKey, _deepClone(game.gameMeta));
+  await dbPut(ledgerKey, _deepClone(game.gameLedger));
+  const actual = await exportGameStateForBackup();
+  if(!actual || _stableJson(actual)!==_stableJson(game)) throw new Error('Game Center restore verification failed');
+  return true;
+}
+
+function _validateGameState(meta, ledger){
+  if(!_isPlainObject(meta) || !Array.isArray(ledger)) return false;
+  if(meta.schemaVersion != null && (!Number.isInteger(Number(meta.schemaVersion)) || Number(meta.schemaVersion)<1)) return false;
+  if(meta.currentStreak != null && !_isFiniteNonNegative(meta.currentStreak)) return false;
+  if(meta.bestStreak != null && !_isFiniteNonNegative(meta.bestStreak)) return false;
+  if(meta.monthlyTargetClaimedFor != null && typeof meta.monthlyTargetClaimedFor !== 'string') return false;
+  if(meta.dailyQuestTargets != null && !_isPlainObject(meta.dailyQuestTargets)) return false;
+  const ids=new Set();
+  for(const e of ledger){
+    if(!_isPlainObject(e) || e.id==null || String(e.id)==='' || e.key==null || String(e.key)==='') return false;
+    const id=String(e.id); if(ids.has(id)) return false; ids.add(id);
+    if(e.xp != null && !Number.isFinite(Number(e.xp))) return false;
+    if(e.reversed != null && typeof e.reversed !== 'boolean') return false;
+    if(e.date != null && typeof e.date !== 'string') return false;
+  }
+  return true;
+}
+
 async function exportBackupJSON(){
   const stamp = todayISO();
   // سازگاری: همان فیلدهای data در ریشه؛ prospectScout و intelligence اختیاری و اضافه
@@ -384,6 +427,11 @@ async function exportBackupJSON(){
 
   const watchLifecycle = await exportWatchLifecycleBundleForBackup();
   if(watchLifecycle) payload.watchLifecycle = watchLifecycle;
+
+  const gameState = await exportGameStateForBackup();
+  if(!gameState) throw new Error('Game Center state unavailable; full backup was not created');
+  payload.gameMeta = gameState.gameMeta;
+  payload.gameLedger = gameState.gameLedger;
 
   await downloadFile(`baqeri-backup-${stamp}.json`, JSON.stringify(payload, null, 2), 'application/json');
   showToast('فایل بکاپ آماده شد');
@@ -576,7 +624,20 @@ function validateBackupShape(parsed){
   const invoiceIds=new Set(parsed.invoices.map(x=>String(x.id)));
   for(const inv of parsed.invoices){
     if(!customerIds.has(String(inv.customerId)) || !Array.isArray(inv.items)) return false;
-    for(const it of inv.items){ if(!_isPlainObject(it) || it.productId==null || !productIds.has(String(it.productId))) return false; }
+    const invoiceNumericFields=['number','total','discount','prevBalance','cashPaid','checkPaid','cardPaid','transferPaid','newBalance'];
+    for(const k of invoiceNumericFields){ if(inv[k] != null && !Number.isFinite(Number(inv[k]))) return false; }
+    for(const it of inv.items){
+      if(!_isPlainObject(it) || it.productId==null || !productIds.has(String(it.productId))) return false;
+      for(const k of ['qty','price','buyPrice','discount','weight']){ if(it[k] != null && !Number.isFinite(Number(it[k]))) return false; }
+      if(it.costAllocations != null){
+        if(!Array.isArray(it.costAllocations)) return false;
+        for(const a of it.costAllocations){
+          if(!_isPlainObject(a)) return false;
+          for(const k of ['qty','unitCost','cost']){ if(a[k] != null && !Number.isFinite(Number(a[k]))) return false; }
+        }
+      }
+      if(it.cogs != null && !Number.isFinite(Number(it.cogs))) return false;
+    }
   }
   for(const pay of parsed.payments){
     if(!customerIds.has(String(pay.customerId)) || (pay.invoiceId!=null && !invoiceIds.has(String(pay.invoiceId))) || !_isFiniteNonNegative(pay.amount)) return false;
@@ -608,6 +669,11 @@ function validateBackupShape(parsed){
   } else {
     if(parsed.prospectScout!=null && !_validateProspectBundle(parsed.prospectScout, customerIds, new Set(), schema)) return false;
     if(parsed.intelligence!=null && !_validateIntelligenceBundle(parsed.intelligence, customerIds, productIds)) return false;
+  }
+  // Optional Game Center state: when present it is validated and restored;
+  // older backups without these fields remain compatible and preserve current game state.
+  if(parsed.gameMeta != null || parsed.gameLedger != null){
+    if(!_validateGameState(parsed.gameMeta, parsed.gameLedger)) return false;
   }
   // Optional additive: invalid watchLifecycle must not reject whole backup
   if(parsed.watchLifecycle != null && !_validateWatchLifecycleBundle(parsed.watchLifecycle)){
@@ -674,12 +740,14 @@ async function restoreIntelligenceBundleStrict(bundle){
 async function _snapshotRestoreState(){
   const prospect=await exportProspectScoutBundle();
   const intelligence=await exportIntelligenceBundle();
-  if(!prospect || !intelligence) throw new Error('complete subsystem snapshot unavailable');
+  const game=await exportGameStateForBackup();
+  if(!prospect || !intelligence || !game) throw new Error('complete subsystem snapshot unavailable');
   return {
     data:_deepClone(data),
     prospect:_deepClone(prospect),
     intelligence:_deepClone(intelligence),
-    target:await _readTargetState()
+    target:await _readTargetState(),
+    game:_deepClone(game)
   };
 }
 async function _applyCrmSnapshot(snapshotData){
@@ -693,9 +761,12 @@ async function _restoreSnapshot(snapshot){
   if(!await restoreProspectScoutBundleStrict(snapshot.prospect)) throw new Error('Prospect restore failed');
   if(!await restoreIntelligenceBundleStrict(snapshot.intelligence)) throw new Error('Intelligence restore failed');
   await _restoreTargetState(snapshot.target);
+  await restoreGameStateForBackup(snapshot.game);
 }
 async function _readCurrentSemanticState(){
-  return {data:_deepClone(data), prospect:await exportProspectScoutBundle(), intelligence:await exportIntelligenceBundle(), target:await _readTargetState()};
+  const game=await exportGameStateForBackup();
+  if(!game) throw new Error('Game Center state unavailable');
+  return {data:_deepClone(data), prospect:await exportProspectScoutBundle(), intelligence:await exportIntelligenceBundle(), target:await _readTargetState(), game:_deepClone(game)};
 }
 function _semanticStateEqual(a,b){ return _stableJson(a)===_stableJson(b); }
 
@@ -730,6 +801,7 @@ async function _restoreParsedBackup(parsed){
     await dbPut(PRERESTORE_PROSPECT_KEY, JSON.stringify(previous.prospect));
     await dbPut(PRERESTORE_INTELLIGENCE_KEY, JSON.stringify(previous.intelligence));
     await dbPut(PRERESTORE_TARGET_KEY, JSON.stringify(previous.target));
+    await dbPut(PRERESTORE_GAME_KEY, JSON.stringify(previous.game));
     try{
       const wSnap = await exportWatchLifecycleBundleForBackup();
       if(wSnap) await dbPut(PRERESTORE_WATCH_KEY, JSON.stringify(wSnap));
@@ -741,7 +813,14 @@ async function _restoreParsedBackup(parsed){
     if(parsed.prospectScout){ if(!await restoreProspectScoutBundleStrict(parsed.prospectScout)) throw new Error('Prospect restore failed'); }
     if(parsed.intelligence){ if(!await restoreIntelligenceBundleStrict(parsed.intelligence)) throw new Error('Intelligence restore failed'); }
     await _writeTargetValue(targetValue);
-    const expected={data:_deepClone(nextData),prospect:parsed.prospectScout ? _deepClone(parsed.prospectScout) : previous.prospect,intelligence:parsed.intelligence ? _deepClone(parsed.intelligence) : previous.intelligence,target:{value:targetValue,localRaw:String(targetValue),dbRaw:targetValue}};
+    if(parsed.gameMeta != null || parsed.gameLedger != null){
+      if(!_validateGameState(parsed.gameMeta, parsed.gameLedger)) throw new Error('Game Center backup validation failed');
+      await restoreGameStateForBackup({gameMeta:_deepClone(parsed.gameMeta), gameLedger:_deepClone(parsed.gameLedger)});
+    }
+    const expectedGame = (parsed.gameMeta != null || parsed.gameLedger != null)
+      ? {gameMeta:_deepClone(parsed.gameMeta), gameLedger:_deepClone(parsed.gameLedger)}
+      : previous.game;
+    const expected={data:_deepClone(nextData),prospect:parsed.prospectScout ? _deepClone(parsed.prospectScout) : previous.prospect,intelligence:parsed.intelligence ? _deepClone(parsed.intelligence) : previous.intelligence,target:{value:targetValue,localRaw:String(targetValue),dbRaw:targetValue},game:expectedGame};
     const actual=await _readCurrentSemanticState();
     if(!_semanticStateEqual(actual,expected)) throw new Error('post-commit verification failed');
     // Additive Watch Lifecycle restore (best-effort; not part of semantic journal equality)
@@ -789,10 +868,12 @@ async function importBackupJSON(file){
 
 async function undoLastRestore(){
   try{
-    const snap=await dbGet(PRERESTORE_KEY), pSnap=await dbGet(PRERESTORE_PROSPECT_KEY), iSnap=await dbGet(PRERESTORE_INTELLIGENCE_KEY), tSnap=await dbGet(PRERESTORE_TARGET_KEY);
-    if(!snap || !snap.value || !pSnap || !pSnap.value || !iSnap || !iSnap.value || !tSnap || !tSnap.value){ showToast('نسخه‌ی کامل قبل از بازیابی موجود نیست'); return; }
+    const snap=await dbGet(PRERESTORE_KEY), pSnap=await dbGet(PRERESTORE_PROSPECT_KEY), iSnap=await dbGet(PRERESTORE_INTELLIGENCE_KEY), tSnap=await dbGet(PRERESTORE_TARGET_KEY), gSnap=await dbGet(PRERESTORE_GAME_KEY);
+    if(!snap || !snap.value || !pSnap || !pSnap.value || !iSnap || !iSnap.value || !tSnap || !tSnap.value || !gSnap || !gSnap.value){ showToast('نسخه‌ی کامل قبل از بازیابی موجود نیست'); return; }
     const storedTarget=JSON.parse(tSnap.value);
-    const previous={data:JSON.parse(snap.value),prospect:JSON.parse(pSnap.value),intelligence:JSON.parse(iSnap.value),target:(storedTarget && typeof storedTarget==='object' && !Array.isArray(storedTarget)) ? storedTarget : {value:Math.max(0,Number(storedTarget)||0),localRaw:String(Math.max(0,Number(storedTarget)||0)),dbRaw:Math.max(0,Number(storedTarget)||0)}};
+    const storedGame=JSON.parse(gSnap.value);
+    if(!_validateGameState(storedGame && storedGame.gameMeta, storedGame && storedGame.gameLedger)) throw new Error('Game Center pre-restore snapshot invalid');
+    const previous={data:JSON.parse(snap.value),prospect:JSON.parse(pSnap.value),intelligence:JSON.parse(iSnap.value),target:(storedTarget && typeof storedTarget==='object' && !Array.isArray(storedTarget)) ? storedTarget : {value:Math.max(0,Number(storedTarget)||0),localRaw:String(Math.max(0,Number(storedTarget)||0)),dbRaw:Math.max(0,Number(storedTarget)||0)},game:storedGame};
     const current=await _snapshotRestoreState();
     const journal={version:2,status:'undoing',createdAt:new Date().toISOString(),snapshot:current};
     await dbPut(RESTORE_JOURNAL_KEY,JSON.stringify(journal));
@@ -806,7 +887,7 @@ async function undoLastRestore(){
           await restoreWatchLifecycleBundleForBackup(JSON.parse(wSnap.value));
         }
       }catch(_wu){}
-      await dbDelete(RESTORE_JOURNAL_KEY); await dbDelete(PRERESTORE_KEY); await dbDelete(PRERESTORE_PROSPECT_KEY); await dbDelete(PRERESTORE_INTELLIGENCE_KEY); await dbDelete(PRERESTORE_TARGET_KEY);
+      await dbDelete(RESTORE_JOURNAL_KEY); await dbDelete(PRERESTORE_KEY); await dbDelete(PRERESTORE_PROSPECT_KEY); await dbDelete(PRERESTORE_INTELLIGENCE_KEY); await dbDelete(PRERESTORE_TARGET_KEY); await dbDelete(PRERESTORE_GAME_KEY);
       try{ await dbDelete(PRERESTORE_WATCH_KEY); }catch(_wd){}
       render(); showToast('به حالت قبل از بازیابی برگشت');
     }catch(e){
@@ -843,6 +924,10 @@ async function autoBackupTick(){
   if(intelligence) payload.intelligence = intelligence;
   const watchLifecycle = await exportWatchLifecycleBundleForBackup();
   if(watchLifecycle) payload.watchLifecycle = watchLifecycle;
+  const gameState = await exportGameStateForBackup();
+  if(!gameState) throw new Error('auto backup payload missing Game Center state');
+  payload.gameMeta = gameState.gameMeta;
+  payload.gameLedger = gameState.gameLedger;
   if(!validateBackupShape(payload)) throw new Error('auto backup payload validation failed');
   await dbPut(key, JSON.stringify(payload));
   list.push({key, ts});
