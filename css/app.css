@@ -3720,3 +3720,303 @@ header{
 @media (prefers-reduced-motion:reduce){
   .eval-progress-fill{transition:none;}
 }
+
+/* ==========================================================
+   Watch UX refinement — compact, grouped, action-first
+   Presentation only. Detection/lifecycle logic untouched.
+   ========================================================== */
+.watch-page-head{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+  margin-bottom:12px;
+}
+.watch-page-head .section-title{margin-bottom:2px;}
+.watch-page-hint{font-size:.72rem;color:var(--ink-soft);line-height:1.5;}
+.watch-total-count{
+  min-width:32px;height:32px;padding:0 8px;border-radius:10px;
+  display:inline-flex;align-items:center;justify-content:center;
+  background:#FBF9F5;border:1px solid var(--line);font-size:.78rem;font-weight:800;
+}
+.watch-customer-group{
+  margin:0 0 10px;
+  border:1px solid var(--line);
+  border-radius:14px;
+  background:var(--surface,#fff);
+  overflow:hidden;
+}
+.watch-customer-head{
+  display:flex;align-items:center;justify-content:space-between;gap:10px;
+  padding:9px 12px;
+  background:#FBF9F5;
+  border-bottom:1px solid var(--line);
+}
+.watch-customer-name{font-size:.82rem;font-weight:800;color:var(--ink);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.watch-customer-count{font-size:.68rem;color:var(--ink-soft);white-space:nowrap;}
+.watch-customer-items{padding:0 10px;}
+.watch-list-row{
+  display:flex;align-items:center;gap:10px;
+  min-height:43px;
+  padding:7px 2px;
+  border-bottom:1px solid var(--line);
+  cursor:pointer;
+  user-select:none;
+}
+.watch-list-row:last-child{border-bottom:none;}
+.watch-list-row:active{background:#FBF9F5;border-radius:8px;}
+.watch-list-main{flex:1;min-width:0;}
+.watch-list-title{font-size:.8rem;font-weight:700;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.watch-list-sub{margin-top:1px;font-size:.66rem;color:var(--ink-soft);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.watch-list-meta{display:flex;flex-direction:column;align-items:flex-end;gap:2px;flex:0 0 auto;}
+.watch-severity-badge{padding:2px 5px;border-radius:6px;background:#FBF9F5;}
+.watch-severity-high{color:#A13131!important;border:1px solid #E1B2AE;}
+.watch-severity-medium{color:#A76A24!important;border:1px solid #EAD0B0;}
+.watch-severity-low{color:#68727D!important;border:1px solid var(--line);}
+.watch-reviewed-badge{font-size:.62rem;line-height:1.2;}
+.watch-detail-top{display:flex;justify-content:flex-start;margin-bottom:10px;}
+.watch-detail-card{
+  position:relative;
+  gap:13px;
+  margin-bottom:10px;
+  cursor:pointer;
+  transition:transform .12s ease,box-shadow .12s ease;
+}
+.watch-detail-card:active{transform:scale(.995);}
+.watch-detail-kicker{font-size:.65rem;color:var(--ink-soft);margin-bottom:2px;}
+.watch-detail-customer-name{font-size:1rem;font-weight:850;color:var(--ink);}
+.watch-detail-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:7px;}
+.watch-detail-actions .btn{width:100%;}
+.watch-detail-footnote{font-size:.68rem;color:var(--ink-soft);line-height:1.6;text-align:center;margin:0 4px 12px;}
+.watch-reason-options{display:grid;gap:7px;}
+.watch-reason-option{width:100%;text-align:right;}
+.watch-sheet-note{margin-bottom:10px;}
+.watch-sheet-note-field{margin-top:10px;}
+.watch-sheet-actions{margin-top:12px;justify-content:space-between;}
+.watch-empty{margin-top:10px;}
+
+/* Dashboard Watch card uses the same visual language as section icons. */
+.dash-watch-compact{padding:9px 11px;border-radius:12px;box-shadow:none;gap:9px;}
+.dash-watch-compact-ico{
+  width:25px;height:25px;flex-basis:25px;border-radius:7px;
+  background:#FBF9F5;border:1px solid #E8E6E1;color:#1A2634;
+}
+.dash-watch-compact-ico svg{width:13px;height:13px;}
+.dash-watch-compact-count{font-size:.9rem;}
+.dash-watch-compact-label{font-size:.68rem;}
+
+@media (max-width:420px){
+  .watch-detail-actions{grid-template-columns:1fr;}
+}
+
+
+/* ============================================================
+   UX polish pack — OPP-07/08/09/10/11 (presentation only)
+   ============================================================ */
+.settings-category-label{
+  font-size:.72rem;
+  font-weight:800;
+  color:var(--color-text-muted);
+  letter-spacing:.04em;
+  margin:18px 0 8px;
+  padding:0 2px;
+  text-transform:none;
+}
+.settings-category-label:first-of-type{margin-top:4px;}
+
+/* Active state for compact filter/sort controls on customers list */
+#customer-filter.active,
+#sort-debt.active{
+  background:var(--color-primary);
+  color:#fff;
+  border-color:var(--color-primary);
+}
+
+/* Searchable customer picker rows */
+.cust-pick-list .cust-pick-row{
+  min-height:48px;
+  border-bottom:1px solid var(--color-border);
+  border-radius:var(--radius-sm);
+  padding:10px 4px;
+}
+.cust-pick-list .cust-pick-row:active{
+  background:var(--color-surface-2);
+}
+.cust-pick-list .cust-pick-row:last-child{border-bottom:none;}
+
+/* Customer history show-more reuses dash-action-toggle */
+.cust-hist-toggle{
+  width:100%;
+  margin:4px 0 12px;
+}
+
+/* Lightweight loading placeholders (OPP-06) */
+.dash-loading,
+.cust-loading{
+  color:var(--color-text-muted);
+  font-size:.9rem;
+  font-weight:600;
+}
+
+
+/* ============================================================
+   PASS 2 — Command Center / Customer Radar / Customer 360
+   Presentation only. Existing palette & tokens.
+   ============================================================ */
+
+/* --- Command Center today strip --- */
+.cc-head{margin-bottom:10px;}
+.cc-today-strip{
+  display:flex;
+  align-items:stretch;
+  gap:10px;
+  margin-bottom:14px;
+  background:var(--color-primary);
+  color:#fff;
+  border-radius:var(--radius-md);
+  padding:14px 14px;
+  box-shadow:var(--shadow-sm);
+}
+.cc-today-main{flex:1;min-width:0;}
+.cc-today-kicker{
+  font-size:.68rem;font-weight:700;opacity:.78;margin-bottom:4px;
+}
+.cc-today-value{
+  font-size:1.35rem;font-weight:900;letter-spacing:-.4px;line-height:1.15;
+}
+.cc-today-sub{font-size:.72rem;opacity:.8;margin-top:4px;}
+.cc-today-side{
+  flex:0 0 auto;
+  text-align:left;
+  padding-inline-start:12px;
+  border-inline-start:1px solid rgba(255,255,255,.18);
+  display:flex;flex-direction:column;justify-content:center;
+}
+.cc-today-side-label{font-size:.64rem;opacity:.75;font-weight:600;}
+.cc-today-side-value{font-size:.95rem;font-weight:800;margin-top:2px;}
+
+/* Attention chips */
+.cc-attn-row{
+  display:flex;flex-wrap:wrap;gap:8px;margin-bottom:4px;
+}
+.cc-attn-chip{
+  display:flex;flex-direction:column;gap:2px;
+  min-height:48px;min-width:0;flex:1 1 calc(50% - 8px);
+  padding:10px 12px;
+  border-radius:var(--radius-sm);
+  border:1px solid var(--color-border);
+  background:var(--color-surface);
+  text-decoration:none;color:inherit;
+  box-shadow:var(--shadow-xs);
+}
+.cc-attn-chip:active{transform:scale(.98);}
+.cc-attn-label{font-size:.78rem;font-weight:800;color:var(--color-text);line-height:1.35;}
+.cc-attn-sub{font-size:.66rem;color:var(--color-text-muted);font-weight:600;}
+.cc-attn-warn{border-color:#EAD0B0;background:var(--color-warning-soft);}
+.cc-attn-danger{border-color:#E1B2AE;background:#FDECEC;}
+.cc-attn-watch{border-color:#E8E0D0;background:#FBF9F5;}
+.cc-attn-debt{border-color:#E1B2AE;background:#FDF6F5;}
+@media (min-width:480px){
+  .cc-attn-chip{flex:1 1 calc(25% - 8px);}
+}
+
+/* --- Customer Radar rows --- */
+.radar-row{
+  align-items:flex-start;
+  padding-top:12px;padding-bottom:12px;
+}
+.radar-main{display:flex;flex-direction:column;gap:4px;min-width:0;}
+.radar-name-line{
+  display:inline-flex;align-items:center;gap:6px;
+  font-weight:700;font-size:.95rem;color:var(--color-text);
+}
+.radar-watch-dot{
+  width:8px;height:8px;border-radius:50%;
+  background:var(--color-warning);flex:0 0 auto;
+  box-shadow:0 0 0 2px var(--color-warning-soft);
+}
+.radar-signals{display:flex;flex-wrap:wrap;gap:4px;margin-top:2px;}
+.radar-pill{
+  display:inline-flex;align-items:center;
+  padding:2px 8px;border-radius:var(--radius-pill);
+  font-size:.64rem;font-weight:700;line-height:1.4;
+  border:1px solid var(--color-border);background:var(--color-bg);
+  color:var(--color-text-muted);
+}
+.radar-fin-debt{color:#A13131;border-color:#E1B2AE;background:#FDECEC;}
+.radar-fin-credit{color:#2F6B45;border-color:#BFD8C8;background:var(--color-success-soft);}
+.radar-fin-ok{color:var(--color-text-muted);}
+.radar-recency-hot{color:#2F6B45;border-color:#BFD8C8;background:var(--color-success-soft);}
+.radar-recency-ok{color:var(--color-primary);border-color:var(--color-border);}
+.radar-recency-warm{color:#A76A24;border-color:#EAD0B0;background:var(--color-warning-soft);}
+.radar-recency-cold{color:#A13131;border-color:#E1B2AE;background:#FDECEC;}
+.radar-recency-none{color:var(--color-text-muted);}
+.radar-amount{font-size:.88rem;font-weight:800;white-space:nowrap;}
+
+/* --- Customer 360 --- */
+.c360-hero{
+  margin-bottom:12px;padding:14px;
+}
+.c360-hero-top{
+  display:flex;align-items:flex-start;justify-content:space-between;gap:12px;
+}
+.c360-identity{min-width:0;flex:1;}
+.c360-name{
+  font-size:1.15rem;font-weight:850;color:var(--color-primary);line-height:1.35;
+}
+.c360-meta{
+  margin-top:6px;font-size:.78rem;color:var(--color-text-muted);line-height:1.55;
+  overflow-wrap:anywhere;
+}
+.c360-health{
+  flex:0 0 auto;min-width:76px;text-align:center;
+  padding:8px 10px;border-radius:var(--radius-sm);
+  border:1px solid var(--color-border);background:var(--color-bg);
+}
+.c360-health-label{font-size:.62rem;font-weight:700;color:var(--color-text-muted);margin-bottom:3px;}
+.c360-health-value{font-size:.78rem;font-weight:800;line-height:1.3;}
+.c360-health-risk{background:#FDECEC;border-color:#E1B2AE;color:#A13131;}
+.c360-health-watch{background:var(--color-warning-soft);border-color:#EAD0B0;color:#A76A24;}
+.c360-health-good{background:var(--color-success-soft);border-color:#BFD8C8;color:#2F6B45;}
+.c360-health-normal{color:var(--color-text);}
+.c360-balance-row{
+  margin-top:12px;padding-top:10px;border-top:1px solid var(--color-border);
+}
+.c360-balance{font-size:1.2rem !important;}
+.c360-fin{margin-bottom:12px;}
+.c360-fin-val{font-size:.95rem !important;}
+.c360-insight{
+  margin-bottom:12px;padding:12px 14px;
+}
+.c360-insight-block{margin-bottom:8px;}
+.c360-insight-block:last-child{margin-bottom:0;}
+.c360-insight-title{
+  font-size:.68rem;font-weight:800;color:var(--color-text-muted);
+  margin-bottom:4px;letter-spacing:.02em;
+}
+.c360-insight-line{font-size:.8rem;line-height:1.55;color:var(--color-text);}
+.c360-risk .c360-insight-title{color:#A13131;}
+.c360-good .c360-insight-title{color:#2F6B45;}
+.c360-next{
+  margin-top:8px;padding-top:8px;border-top:1px dotted var(--color-border);
+}
+.c360-next-text{font-size:.84rem;font-weight:700;color:var(--color-primary);line-height:1.5;}
+.c360-actions{
+  display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:8px;
+}
+.c360-actions .btn{
+  width:100%;padding:10px 6px;font-size:.78rem;min-height:44px;
+}
+.c360-more-actions{
+  margin-bottom:14px;
+}
+.c360-more-actions > summary{
+  cursor:pointer;font-size:.78rem;font-weight:700;color:var(--color-primary);
+  padding:6px 2px;list-style:none;
+}
+.c360-more-actions > summary::-webkit-details-marker{display:none;}
+@media (max-width:360px){
+  .c360-actions{grid-template-columns:1fr 1fr;}
+  .cc-today-value{font-size:1.15rem;}
+}
+
