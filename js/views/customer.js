@@ -148,8 +148,7 @@
     competitor: 'رقیب',
     unavailable: 'ناموجود',
     no_need: 'عدم نیاز',
-    other: 'سایر',
-    still_stock: 'موجودی دارد'
+    other: 'سایر'
   };
 
   function rejectionReasonLabel(code) {
@@ -261,8 +260,16 @@
     if (typeof getActiveWatchOccurrences === 'function') {
       try { occs = getActiveWatchOccurrences(cid) || []; } catch (eOcc) { occs = []; }
     }
-    // Fallback to raw generation if lifecycle absent
-    if (!occs.length && typeof extractWatchObservations === 'function') {
+    // Fallback to raw generation if lifecycle absent. Guarded against
+    // inactive customers too (W-BUG-02): this path bypasses
+    // reconcileWatchLifecycle's own active-customer check entirely, so an
+    // inactive customer must never reach it even as a display-only fallback.
+    var custIsActive = true;
+    if (typeof data !== 'undefined' && Array.isArray(data.customers)) {
+      var custRec = data.customers.find(function (x) { return x && x.id === cid; });
+      custIsActive = !!(custRec && custRec.active !== false);
+    }
+    if (!occs.length && custIsActive && typeof extractWatchObservations === 'function') {
       try {
         var raw = extractWatchObservations(cid, confirmed) || [];
         occs = raw.map(function (w, idx) {
@@ -331,8 +338,8 @@
         '</div>';
       }).join('');
       watchHtml = '<div class="card wide" style="margin-bottom:10px;" id="watch-lifecycle-card">' +
-        '<div class="label">هشدار زودهنگام (WATCH / EARLY WARNING)</div>' +
-        '<div class="report-note" style="margin:4px 0 8px;">برای ثبت علت، روی هشدار بزنید. ثبت علت، هشدار را حذف نمی‌کند.</div>' +
+        '<div class="label">هشدارهای زودهنگام</div>' +
+        '<div class="report-note" style="margin:4px 0 8px;">برای ثبت علت، روی مورد بزنید. ثبت علت، هشدار را حذف نمی‌کند.</div>' +
         '<div style="margin-top:6px;">' + wrows + '</div></div>';
     }
 
@@ -362,11 +369,29 @@
       '<div id="watch-reason-list">' + optsHtml + '</div>' +
       '<div class="field" style="margin-top:10px;"><label>یادداشت (اختیاری)</label>' +
       '<input type="text" id="watch-reason-note" autocomplete="off" placeholder="توضیح کوتاه..."></div>' +
-      '<div class="btn-row" style="margin-top:12px;justify-content:flex-end;">' +
+      '<div class="btn-row" style="margin-top:12px;justify-content:space-between;">' +
+      '<button type="button" class="btn secondary" id="watch-dismiss-btn">بستن هشدار</button>' +
       '<button type="button" class="btn secondary" id="watch-reason-cancel">انصراف</button></div>'
     );
     var cancel = document.getElementById('watch-reason-cancel');
     if (cancel) cancel.onclick = function () { if (typeof closeModal === 'function') closeModal(); };
+    var dismissBtn = document.getElementById('watch-dismiss-btn');
+    if (dismissBtn) {
+      dismissBtn.onclick = function () {
+        if (typeof dismissWatchOccurrence !== 'function') return;
+        var noteEl = document.getElementById('watch-reason-note');
+        var note = noteEl ? noteEl.value : '';
+        try {
+          dismissWatchOccurrence(occurrenceId, note);
+          if (typeof showToast === 'function') showToast('هشدار بسته شد');
+        } catch (err) {
+          console.error(err);
+          if (typeof showToast === 'function') showToast('بستن هشدار ممکن نشد');
+        }
+        if (typeof closeModal === 'function') closeModal();
+        if (typeof onDone === 'function') onDone();
+      };
+    }
     var list = document.getElementById('watch-reason-list');
     if (list) {
       list.addEventListener('click', function (e) {
@@ -396,6 +421,67 @@
         openWatchReasonSheet(id, function () {
           if (typeof drawCustomerPage === 'function') drawCustomerPage(rootEl || root);
         });
+      });
+    });
+  }
+
+
+  /* OPP-03: collapse long history to latest N with "show more" toggle (presentation only). */
+  var HISTORY_PREVIEW = 5;
+  function collapseHistoryHtml(allRowsHtml, sectionKey, totalCount) {
+    if (!allRowsHtml || totalCount <= HISTORY_PREVIEW) return allRowsHtml;
+    // Split joined ledger-rows by detecting closing tags of ledger-row elements is fragile;
+    // instead callers pass already-sliced visible + hidden arrays.
+    return allRowsHtml;
+  }
+  function historyShowMoreBlock(hiddenCount, sectionKey) {
+    if (hiddenCount <= 0) return '';
+    return (
+      '<div class="cust-hist-more" data-hist-more="' + sectionKey + '" hidden></div>' +
+      '<button type="button" class="dash-action-toggle cust-hist-toggle" data-hist-toggle="' + sectionKey + '" aria-expanded="false">' +
+        '<span data-hist-toggle-label="' + sectionKey + '">نمایش ' + hiddenCount + ' مورد دیگر</span>' +
+        '<span class="dash-action-toggle-ico" aria-hidden="true">›</span>' +
+      '</button>'
+    );
+  }
+  function buildCollapsedRows(items, mapFn, sectionKey) {
+    if (!items.length) return { html: '', more: '' };
+    var visible = items.slice(0, HISTORY_PREVIEW);
+    var hidden = items.slice(HISTORY_PREVIEW);
+    var visHtml = visible.map(mapFn).join('');
+    if (!hidden.length) return { html: visHtml, more: '' };
+    var hidHtml = hidden.map(mapFn).join('');
+    return {
+      html: visHtml +
+        '<div class="cust-hist-more" data-hist-more="' + sectionKey + '" hidden>' + hidHtml + '</div>',
+      more:
+        '<button type="button" class="dash-action-toggle cust-hist-toggle" data-hist-toggle="' + sectionKey + '" aria-expanded="false">' +
+          '<span data-hist-toggle-label="' + sectionKey + '">نمایش ' + hidden.length + ' مورد دیگر</span>' +
+          '<span class="dash-action-toggle-ico" aria-hidden="true">›</span>' +
+        '</button>'
+    };
+  }
+  function bindHistoryToggles(root) {
+    if (!root) return;
+    root.querySelectorAll('[data-hist-toggle]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var key = btn.getAttribute('data-hist-toggle');
+        var more = root.querySelector('[data-hist-more="' + key + '"]');
+        var label = root.querySelector('[data-hist-toggle-label="' + key + '"]');
+        if (!more) return;
+        var expanded = btn.getAttribute('aria-expanded') === 'true';
+        var hiddenCount = more.querySelectorAll('.ledger-row').length;
+        if (expanded) {
+          more.hidden = true;
+          btn.setAttribute('aria-expanded', 'false');
+          btn.classList.remove('is-open');
+          if (label) label.textContent = 'نمایش ' + hiddenCount + ' مورد دیگر';
+        } else {
+          more.hidden = false;
+          btn.setAttribute('aria-expanded', 'true');
+          btn.classList.add('is-open');
+          if (label) label.textContent = 'نمایش کمتر';
+        }
       });
     });
   }
@@ -449,82 +535,79 @@
       return (b.date || '').localeCompare(a.date || '') || (b.time || '').localeCompare(a.time || '');
     });
 
-    const invRows = invs.length
-      ? invs
-          .map(function (inv) {
-            const st = invoicePayStatus(inv);
-            return (
-              '<a class="ledger-row" href="#/invoice?id=' +
-              encodeURIComponent(inv.id) +
-              '" style="text-decoration:none;color:inherit;">' +
-              '<span class="name">#' +
-              esc(String(inv.number || '')) +
-              '<span class="sub">' +
-              faDate(inv.date) +
-              ' — <span class="' +
-              st.cls +
-              '">' +
-              st.label +
-              '</span></span></span>' +
-              '<span class="filler"></span>' +
-              '<span class="amount">' +
-              toman(inv.total) +
-              ' ت</span></a>'
-            );
-          })
-          .join('')
-      : '<div class="empty" style="padding:12px 0;">فاکتوری ثبت نشده</div>';
+    const invMap = function (inv) {
+      const st = invoicePayStatus(inv);
+      return (
+        '<a class="ledger-row" href="#/invoice?id=' +
+        encodeURIComponent(inv.id) +
+        '" style="text-decoration:none;color:inherit;">' +
+        '<span class="name">#' +
+        esc(String(inv.number || '')) +
+        '<span class="sub">' +
+        faDate(inv.date) +
+        ' — <span class="' +
+        st.cls +
+        '">' +
+        st.label +
+        '</span></span></span>' +
+        '<span class="filler"></span>' +
+        '<span class="amount">' +
+        toman(inv.total) +
+        ' ت</span></a>'
+      );
+    };
+    const invCollapsed = invs.length
+      ? buildCollapsedRows(invs, invMap, 'inv')
+      : { html: '<div class="empty" style="padding:12px 0;">فاکتوری ثبت نشده</div>', more: '' };
+    const invRows = invCollapsed.html + invCollapsed.more;
 
-    const payRows = pays.length
-      ? pays
-          .map(function (p) {
-            const method = paymentMethodLabel(p.method);
-            return (
-              '<div class="ledger-row">' +
-              '<span class="name">' +
-              esc(method) +
-              (p.note ? '<span class="sub">' + esc(p.note) + '</span>' : '') +
-              '<span class="sub">' +
-              faDate(p.date) +
-              '</span></span>' +
-              '<span class="filler"></span>' +
-              '<span class="amount">' +
-              toman(p.amount) +
-              ' ت</span></div>'
-            );
-          })
-          .join('')
-      : '<div class="empty" style="padding:12px 0;">پرداختی ثبت نشده</div>';
+    const payMap = function (p) {
+      const method = paymentMethodLabel(p.method);
+      return (
+        '<div class="ledger-row">' +
+        '<span class="name">' +
+        esc(method) +
+        (p.note ? '<span class="sub">' + esc(p.note) + '</span>' : '') +
+        '<span class="sub">' +
+        faDate(p.date) +
+        '</span></span>' +
+        '<span class="filler"></span>' +
+        '<span class="amount">' +
+        toman(p.amount) +
+        ' ت</span></div>'
+      );
+    };
+    const payCollapsed = pays.length
+      ? buildCollapsedRows(pays, payMap, 'pay')
+      : { html: '<div class="empty" style="padding:12px 0;">پرداختی ثبت نشده</div>', more: '' };
+    const payRows = payCollapsed.html + payCollapsed.more;
 
-    const chkRows = chks.length
-      ? chks
-          .map(function (ch) {
-            const st = ch.status === 'cleared' ? 'پاس‌شده' : 'در جریان';
-            const stCls = ch.status === 'cleared' ? 'accent-olive' : 'accent-amber';
-            return (
-              '<div class="ledger-row">' +
-              '<span class="name">' +
-              esc(ch.checkNumber || 'چک') +
-              '<span class="sub">سررسید: ' +
-              faDate(ch.dueDate) +
-              ' — <span class="' +
-              stCls +
-              '">' +
-              st +
-              '</span></span></span>' +
-              '<span class="filler"></span>' +
-              '<span class="amount">' +
-              toman(ch.amount) +
-              ' ت</span></div>'
-            );
-          })
-          .join('')
-      : '<div class="empty" style="padding:12px 0;">چکی ثبت نشده</div>';
+    const chkMap = function (ch) {
+      const st = ch.status === 'cleared' ? 'پاس‌شده' : 'در جریان';
+      const stCls = ch.status === 'cleared' ? 'accent-olive' : 'accent-amber';
+      return (
+        '<div class="ledger-row">' +
+        '<span class="name">' +
+        esc(ch.checkNumber || 'چک') +
+        '<span class="sub">سررسید: ' +
+        faDate(ch.dueDate) +
+        ' — <span class="' +
+        stCls +
+        '">' +
+        st +
+        '</span></span></span>' +
+        '<span class="filler"></span>' +
+        '<span class="amount">' +
+        toman(ch.amount) +
+        ' ت</span></div>'
+      );
+    };
+    const chkCollapsed = chks.length
+      ? buildCollapsedRows(chks, chkMap, 'chk')
+      : { html: '<div class="empty" style="padding:12px 0;">چکی ثبت نشده</div>', more: '' };
+    const chkRows = chkCollapsed.html + chkCollapsed.more;
 
-    const visitRows = visits.length
-      ? visits
-          .slice(0, 30)
-          .map(function (v) {
+    const visitMap = function (v) {
             const scoreBit = typeof v.score === 'number' ? ' — امتیاز: ' + v.score + ' از ۱۰۰' : '';
             const extraBits = [];
             if (v.reason) extraBits.push('دلیل: ' + v.reason);
@@ -534,18 +617,12 @@
             if (Array.isArray(v.tags) && v.tags.length) extraBits.push('برچسب: ' + v.tags.join('، '));
             if (Array.isArray(v.offeredProducts) && v.offeredProducts.length) {
               var rxMap = { accepted: 'قبول', rejected: 'رد', deferred: 'بعداً' };
-              var rrMap = { price: 'قیمت', quality: 'کیفیت', competitor: 'رقیب', unavailable: 'ناموجود', no_need: 'عدم نیاز', other: 'سایر', still_stock: 'موجودی دارد' };
-              var ssMap = { ours: 'از ما', other: 'از جای دیگر', unknown: 'نامشخص' };
+              var rrMap = { price: 'قیمت', quality: 'کیفیت', competitor: 'رقیب', unavailable: 'ناموجود', no_need: 'عدم نیاز', other: 'سایر' };
               var bits = v.offeredProducts.map(function (op) {
                 var prod = (data.products || []).find(function (p) { return p.id === op.productId; });
                 var name = prod ? prod.name : (op.productId || '—');
                 var s = name + ' (' + (rxMap[op.reaction] || op.reaction || '—') + ')';
-                if (op.reaction === 'rejected' && op.rejectionReason) {
-                  s += ' — ' + (rrMap[op.rejectionReason] || op.rejectionReason);
-                  if (op.rejectionReason === 'still_stock' && op.stockSource && ssMap[op.stockSource]) {
-                    s += ' (' + ssMap[op.stockSource] + ')';
-                  }
-                }
+                if (op.reaction === 'rejected' && op.rejectionReason) s += ' — ' + (rrMap[op.rejectionReason] || op.rejectionReason);
                 return s;
               });
               extraBits.push('پیشنهاد: ' + bits.join('؛ '));
@@ -575,9 +652,11 @@
               (ordered ? 'سفارش' : 'ویزیت') +
               '</span></div>'
             );
-          })
-          .join('')
-      : '<div class="empty" style="padding:12px 0;">ویزیتی ثبت نشده</div>';
+          };
+    const visitCollapsed = visits.length
+      ? buildCollapsedRows(visits, visitMap, 'visit')
+      : { html: '<div class="empty" style="padding:12px 0;">ویزیتی ثبت نشده</div>', more: '' };
+    const visitRows = visitCollapsed.html + visitCollapsed.more;
 
     let behaviorHtml = '';
     if (typeof customerBehavior === 'function') {
@@ -757,83 +836,123 @@
         '</details>';
     }
 
+    // PASS 2 — Customer 360 hierarchy (presentation only)
+    var summary = null;
+    try {
+      if (typeof customerBehavior === 'function') {
+        summary = customerBehaviorSummary(customerBehavior(c.id));
+      }
+    } catch (eS) { summary = null; }
+
+    var healthLevel = (summary && summary.level) ? summary.level : 'normal';
+    var healthLabel = {
+      risk: 'نیاز به توجه',
+      watch: 'قابل بررسی',
+      good: 'وضعیت مطلوب',
+      normal: 'عادی',
+      insufficient: 'دادهٔ کافی نیست'
+    }[healthLevel] || 'عادی';
+    var healthCls = {
+      risk: 'c360-health-risk',
+      watch: 'c360-health-watch',
+      good: 'c360-health-good',
+      normal: 'c360-health-normal',
+      insufficient: 'c360-health-normal'
+    }[healthLevel] || 'c360-health-normal';
+
+    var nextActionText = null;
+    if (summary && summary.action) nextActionText = summary.action;
+    else if (summary && summary.reminder) nextActionText = summary.reminder;
+
+    var riskLines = (summary && summary.risk && summary.risk.length) ? summary.risk.slice(0, 2) : [];
+    var goodLines = (summary && summary.good && summary.good.length) ? summary.good.slice(0, 1) : [];
+
+    var locLine = c.locationId
+      ? esc(getLocationDisplayString(c.locationId))
+      : [c.region, c.route].filter(Boolean).map(esc).join(' — ');
+
+    var identityMeta = [];
+    if (c.ownerName) identityMeta.push(esc(c.ownerName));
+    if (c.phone) identityMeta.push(esc(c.phone));
+    if (locLine) identityMeta.push(locLine);
+
     root.innerHTML =
       '<div class="btn-row" style="margin-bottom:10px;">' +
-      '<a class="btn secondary small" href="' +
-      customersHref() +
-      '">← مشتریان</a></div>' +
-      '<div class="card" style="margin-bottom:12px;">' +
-      '<div style="font-size:1.15rem;font-weight:800;color:var(--olive-dark);margin-bottom:8px;">' +
-      esc(c.name) +
+      '<a class="btn secondary small" href="' + customersHref() + '">← مشتریان</a></div>' +
+
+      /* IDENTITY */
+      '<div class="c360-hero card">' +
+        '<div class="c360-hero-top">' +
+          '<div class="c360-identity">' +
+            '<div class="c360-name">' + esc(c.name) +
+              (c.active === false ? ' <span class="badge pending">غیرفعال</span>' : '') +
+            '</div>' +
+            (identityMeta.length ? '<div class="c360-meta">' + identityMeta.join(' · ') + '</div>' : '') +
+          '</div>' +
+          '<div class="c360-health ' + healthCls + '">' +
+            '<div class="c360-health-label">سلامت خرید</div>' +
+            '<div class="c360-health-value">' + esc(healthLabel) + '</div>' +
+          '</div>' +
+        '</div>' +
+        '<div class="c360-balance-row">' +
+          '<div class="label">مانده حساب</div>' +
+          '<div class="value ' + color + ' c360-balance">' + balanceLine + '</div>' +
+        '</div>' +
       '</div>' +
-      '<div style="font-size:.88rem;line-height:1.85;color:var(--ink);">' +
-      (c.ownerName ? '<div>صاحب: ' + esc(c.ownerName) + '</div>' : '') +
-      (c.phone ? '<div>تلفن: ' + esc(c.phone) + '</div>' : '') +
-      (c.locationId
-        ? '<div>موقعیت: ' + esc(getLocationDisplayString(c.locationId)) + '</div>'
-        : ((c.region ? '<div>منطقه: ' + esc(c.region) + '</div>' : '') +
-           (c.route ? '<div>مسیر: ' + esc(c.route) + '</div>' : ''))) +
-      (c.address ? '<div>آدرس: ' + esc(c.address) + '</div>' : '') +
-      (c.note ? '<div>یادداشت: ' + esc(c.note) + '</div>' : '') +
+
+      /* FINANCIAL SNAPSHOT */
+      '<div class="c360-fin cards">' +
+        '<div class="card"><div class="label">خرید کل</div><div class="value c360-fin-val">' + toman(t.invTotal) + '</div></div>' +
+        '<div class="card"><div class="label">پرداخت‌ها</div><div class="value c360-fin-val">' + toman(t.payTotal) + '</div></div>' +
+        '<div class="card"><div class="label">چک‌ها</div><div class="value c360-fin-val">' + toman(t.checkTotal) + '</div></div>' +
+        '<div class="card"><div class="label">سود</div><div class="value c360-fin-val accent-amber">' + toman(profit) + '</div></div>' +
       '</div>' +
-      '<div style="margin-top:12px;padding-top:10px;border-top:1px dotted var(--line);">' +
-      '<div class="label">مانده حساب</div>' +
-      '<div class="value ' +
-      color +
-      '" style="font-size:1.25rem;">' +
-      balanceLine +
-      '</div></div></div>' +
-      '<div class="cards" style="margin-bottom:14px;">' +
-      '<div class="card"><div class="label">مجموع خرید (فاکتورها)</div><div class="value">' +
-      toman(t.invTotal) +
-      ' ت</div></div>' +
-      '<div class="card"><div class="label">مجموع پرداخت‌ها</div><div class="value">' +
-      toman(t.payTotal) +
-      ' ت</div></div>' +
-      '<div class="card"><div class="label">جمع چک‌ها</div><div class="value">' +
-      toman(t.checkTotal) +
-      ' ت</div></div>' +
-      '<div class="card"><div class="label">مانده اولیه</div><div class="value">' +
-      toman(t.openingBalance) +
-      ' ت</div></div>' +
-      '<div class="card"><div class="label">تعداد فاکتور</div><div class="value">' +
-      invs.length +
-      '</div></div>' +
-      '<div class="card"><div class="label">سود مشتری</div><div class="value accent-amber">' +
-      toman(profit) +
-      ' ت</div></div>' +
+
+      /* RISK / OPPORTUNITY */
+      ((riskLines.length || goodLines.length || nextActionText) ? (
+        '<div class="c360-insight card">' +
+          (riskLines.length ? '<div class="c360-insight-block c360-risk">' +
+            '<div class="c360-insight-title">ریسک / توجه</div>' +
+            riskLines.map(function (x) { return '<div class="c360-insight-line">• ' + esc(x) + '</div>'; }).join('') +
+          '</div>' : '') +
+          (goodLines.length ? '<div class="c360-insight-block c360-good">' +
+            '<div class="c360-insight-title">نقطه قوت</div>' +
+            goodLines.map(function (x) { return '<div class="c360-insight-line">• ' + esc(x) + '</div>'; }).join('') +
+          '</div>' : '') +
+          (nextActionText ? '<div class="c360-next">' +
+            '<div class="c360-insight-title">اقدام پیشنهادی</div>' +
+            '<div class="c360-next-text">' + esc(nextActionText) + '</div>' +
+          '</div>' : '') +
+        '</div>'
+      ) : '') +
+
+      /* PRIMARY ACTIONS — customer context already known */
+      '<div class="c360-actions">' +
+        '<button type="button" class="btn" id="act-invoice">فاکتور</button>' +
+        '<button type="button" class="btn secondary" id="act-pay">دریافت</button>' +
+        '<button type="button" class="btn secondary" id="act-visit">ویزیت</button>' +
+        '<button type="button" class="btn secondary" id="act-check">چک</button>' +
       '</div>' +
+      '<details class="c360-more-actions">' +
+        '<summary>عملیات بیشتر</summary>' +
+        '<div class="btn-row" style="margin:8px 0 12px;">' +
+          '<button type="button" class="btn small secondary" id="act-edit">ویرایش</button>' +
+          '<button type="button" class="btn small secondary" id="act-location">موقعیت</button>' +
+          '<button type="button" class="btn small secondary" id="act-print-statement">صورت‌حساب</button>' +
+          '<button type="button" class="btn small secondary" id="act-toggle-active">' + (c.active === false ? 'فعال‌سازی' : 'غیرفعال‌سازی') + '</button>' +
+        '</div>' +
+      '</details>' +
+
       behaviorHtml +
       productRejectionInsightsHtml(c.id) +
-      '<h3 class="sub-title">عملیات سریع</h3>' +
-      '<div class="btn-row" style="margin-bottom:16px;">' +
-      '<button type="button" class="btn small" id="act-invoice">ثبت فاکتور</button>' +
-      '<button type="button" class="btn small secondary" id="act-pay">ثبت پرداخت</button>' +
-      '<button type="button" class="btn small secondary" id="act-visit">ثبت ویزیت</button>' +
-      '<button type="button" class="btn small secondary" id="act-check">ثبت چک</button>' +
-      '<button type="button" class="btn small secondary" id="act-edit">ویرایش مشتری</button>' +
-      '<button type="button" class="btn small secondary" id="act-location">اختصاص موقعیت</button>' +
-      '<button type="button" class="btn small secondary" id="act-print-statement">🖨️ صورت‌حساب</button>' +
-      '</div>' +
-      '<h3 class="sub-title">فاکتورها (' +
-      invs.length +
-      ')</h3>' +
-      invRows +
-      '<h3 class="sub-title">پرداخت‌ها (' +
-      pays.length +
-      ')</h3>' +
-      payRows +
-      '<h3 class="sub-title">چک‌ها (' +
-      chks.length +
-      ')</h3>' +
-      chkRows +
-      '<h3 class="sub-title">ویزیت‌ها و ارزیابی‌ها (' +
-      visits.length +
-      ')</h3>' +
+
+      '<h3 class="sub-title">فاکتورها (' + invs.length + ')</h3>' + invRows +
+      '<h3 class="sub-title">پرداخت‌ها (' + pays.length + ')</h3>' + payRows +
+      '<h3 class="sub-title">چک‌ها (' + chks.length + ')</h3>' + chkRows +
+      '<h3 class="sub-title">ویزیت‌ها (' + visits.length + ')</h3>' +
       '<div class="btn-row" style="margin-bottom:8px;">' +
-      '<button type="button" class="btn small" id="act-visit-section">ثبت ویزیت برای این مشتری</button>' +
-      '<a class="btn small secondary" href="#/visits">همه ویزیت‌ها</a>' +
-      '</div>' +
+      '<button type="button" class="btn small" id="act-visit-section">ثبت ویزیت</button>' +
+      '<a class="btn small secondary" href="#/visits">همه ویزیت‌ها</a></div>' +
       visitRows;
 
     document.getElementById('act-invoice').onclick = function () {
@@ -873,7 +992,24 @@
         if (typeof printCustomerStatement === 'function') printCustomerStatement(c.id);
       };
     }
+    const toggleActiveBtn = document.getElementById('act-toggle-active');
+    if (toggleActiveBtn) {
+      toggleActiveBtn.onclick = async function (ev) {
+        await withSubmitGuard(ev.currentTarget, async () => {
+          const willDeactivate = c.active !== false;
+          const msg = willDeactivate
+            ? 'این مشتری غیرفعال شود؟ اطلاعات، فاکتورها، پرداخت‌ها، چک‌ها و سوابق او حذف نخواهد شد.'
+            : 'مشتری «' + c.name + '» دوباره فعال شود؟';
+          if (!confirm(msg)) throw new Error('validation');
+          c.active = (c.active === false) ? true : false;
+          await saveData();
+          drawCustomerPage(rootEl || root);
+          showToast(c.active === false ? 'مشتری غیرفعال شد' : 'مشتری فعال شد');
+        });
+      };
+    }
     bindWatchLifecycleRows(root);
+    bindHistoryToggles(root);
   }
 
   function mount(root, params) {
@@ -888,6 +1024,10 @@
     function refreshCustomer() {
       function paint() { drawCustomerPage(rootEl || root); }
       if (typeof reconcileWatchLifecycle === 'function' && currentCustomerId) {
+        // Lightweight placeholder while watch lifecycle reconciles (OPP-06)
+        if (root && !root.querySelector('.card') && !root.querySelector('.cust-loading')) {
+          root.innerHTML = '<div class="cust-loading empty" style="padding:28px 14px;text-align:center;">در حال بارگذاری…</div>';
+        }
         reconcileWatchLifecycle(currentCustomerId).then(paint).catch(function () { paint(); });
       } else {
         paint();

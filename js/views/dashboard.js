@@ -66,6 +66,14 @@
      global add-* functions (openAddInvoice/openAddTransaction/openAddVisit).
      No new business logic — same pattern as invoices.js's openNewInvoicePicker. */
   function quickActionPickCustomer(title, fn) {
+    if (typeof openSearchableCustomerPicker === 'function') {
+      openSearchableCustomerPicker({
+        title: title,
+        onPick: function (cid) { if (typeof fn === 'function') fn(cid); }
+      });
+      return;
+    }
+    // Fallback (should not hit in production SPA)
     if (!data.customers || !data.customers.length) {
       if (typeof openSheet === 'function') {
         openSheet('<h3>مشتری ندارید</h3><div class="empty">اول از بخش مشتریان، یک مشتری ثبت کنید.</div>' +
@@ -270,7 +278,7 @@
 
     if (!count) return '';
 
-    return '<div class="dashboard-block">' + dashSectionHead(ICO.actions, 'هشدار زودهنگام (Watch)', '', '') +
+    return '<div class="dashboard-block">' + dashSectionHead(ICO.actions, 'هشدارهای زودهنگام', '', '') +
       '<a class="dash-watch-compact" href="#/watches">' +
         '<span class="dash-watch-compact-ico" aria-hidden="true">' + ICO.actions + '</span>' +
         '<span class="dash-watch-compact-body">' +
@@ -416,6 +424,99 @@
     try { return Number(value).toLocaleString('fa-IR'); } catch(e) { return String(value || ''); }
   }
 
+
+  /* ---- PASS 2: Command Center attention + today strip (UI only; existing data) ---- */
+  function attentionHtml() {
+    var items = [];
+    // Due checks
+    try {
+      if (typeof checksDueSoon === 'function') {
+        var due = checksDueSoon() || [];
+        if (due.length) {
+          items.push({
+            href: '#/checks?filter=dueSoon',
+            cls: 'cc-attn-warn',
+            label: due.length + ' چک نزدیک سررسید',
+            sub: 'نیاز به پیگیری'
+          });
+        }
+      }
+    } catch (e) {}
+    // Low stock
+    try {
+      if (typeof lowStockProducts === 'function') {
+        var low = lowStockProducts() || [];
+        if (low.length) {
+          items.push({
+            href: '#/products',
+            cls: 'cc-attn-danger',
+            label: low.length + ' کالای رو به اتمام',
+            sub: 'موجودی'
+          });
+        }
+      }
+    } catch (e) {}
+    // Active watches
+    try {
+      var wCount = 0;
+      if (typeof getWatchLifecycleSummary === 'function') {
+        var s = getWatchLifecycleSummary();
+        if (s && typeof s.active === 'number') wCount = s.active;
+      } else if (typeof getActiveWatchOccurrences === 'function') {
+        wCount = (getActiveWatchOccurrences() || []).length;
+      }
+      if (wCount > 0) {
+        items.push({
+          href: '#/watches',
+          cls: 'cc-attn-watch',
+          label: wCount + ' هشدار زودهنگام',
+          sub: 'بررسی مشتری'
+        });
+      }
+    } catch (e) {}
+    // Customer debt signal
+    try {
+      var g = globalTotals();
+      var debtors = typeof debtorList === 'function' ? debtorList(9999) : [];
+      if (g && g.customerDebt > 0 && debtors.length) {
+        items.push({
+          href: '#/customers?filter=debt',
+          cls: 'cc-attn-debt',
+          label: debtors.length + ' مشتری بدهکار',
+          sub: toman(Math.round(g.customerDebt)) + ' ت'
+        });
+      }
+    } catch (e) {}
+
+    if (!items.length) return '';
+    var chips = items.slice(0, 4).map(function (it) {
+      return '<a class="cc-attn-chip ' + it.cls + '" href="' + it.href + '">' +
+        '<span class="cc-attn-label">' + esc(it.label) + '</span>' +
+        (it.sub ? '<span class="cc-attn-sub">' + esc(it.sub) + '</span>' : '') +
+      '</a>';
+    }).join('');
+    return '<div class="dashboard-block cc-attention">' +
+      dashSectionHead(ICO.actions, 'نیاز به توجه', '', '') +
+      '<div class="cc-attn-row">' + chips + '</div></div>';
+  }
+
+  function todayStripHtml(g, metrics) {
+    var todaySales = (g && g.todaySales != null) ? g.todaySales : 0;
+    var todayCount = (g && g.todayCount != null) ? g.todayCount : 0;
+    var monthSales = (metrics && metrics.mtdSales != null) ? metrics.mtdSales : ((g && g.monthSales) || 0);
+    return '<div class="cc-today-strip">' +
+      '<div class="cc-today-main">' +
+        '<div class="cc-today-kicker">امروز</div>' +
+        '<div class="cc-today-value">' + money(todaySales) + '</div>' +
+        '<div class="cc-today-sub">' + (todayCount ? (todayCount + ' فاکتور') : 'هنوز فروشی ثبت نشده') + '</div>' +
+      '</div>' +
+      '<div class="cc-today-side">' +
+        '<div class="cc-today-side-label">فروش ماه</div>' +
+        '<div class="cc-today-side-value">' + money(monthSales) + '</div>' +
+      '</div>' +
+    '</div>';
+  }
+
   async function renderInto(root, isStale) {
     // Lifecycle reconcile before painting Watch summary (additive; fail-open)
     if (typeof reconcileWatchLifecycle === 'function') {
@@ -426,14 +527,22 @@
     const invVal = inventoryValue();
     if (typeof isStale === 'function' && isStale()) return;
 
+    // PASS 2 hierarchy: Today → Attention → Next action → Target → Snapshot → Quick → Recent
+    // Watch summary absorbed into attention when count>0; keep compact card only if attention empty
+    var attn = attentionHtml();
+    var watchBlock = attn ? '' : watchSummaryHtml();
     root.innerHTML =
       '<div class="dashboard-shell">' +
-      '<h2 class="section-title">داشبورد</h2>' +
-      '<div class="dashboard-eyebrow">مرکز فرماندهی روزانه</div>' +
-      targetHtml(metrics) +
+      '<div class="cc-head">' +
+        '<h2 class="section-title" style="margin-bottom:2px;">مرکز فرماندهی</h2>' +
+        '<div class="dashboard-eyebrow">وضعیت امروز · اقدام بعدی · نمای کلی</div>' +
+      '</div>' +
+      todayStripHtml(g, metrics) +
+      attn +
       todaysActionsHtml() +
-      watchSummaryHtml() +
-      '<div class="dashboard-block">' + dashSectionHead(ICO.summary, 'خلاصه وضعیت', '', '') +
+      targetHtml(metrics) +
+      watchBlock +
+      '<div class="dashboard-block">' + dashSectionHead(ICO.summary, 'نمای کلی کسب‌وکار', '#/reports', 'گزارش‌ها ←') +
       '<div class="dash-kpis">' +
       '<a class="dash-kpi sales dash-kpi-link" href="#/reports"><div class="dash-kpi-label">فروش این ماه</div><div class="dash-kpi-value sales">' + money(metrics.mtdSales) + '</div><div class="dash-kpi-sub">' + deltaHtml(metrics.salesDeltaPct) + '</div><span class="dash-kpi-chevron" aria-hidden="true">‹</span></a>' +
       '<div class="dash-kpi profit"><div class="dash-kpi-label">سود این ماه</div><div class="dash-kpi-value profit">' + money(metrics.mtdProfit) + '</div><div class="dash-kpi-sub">' + deltaHtml(metrics.profitDeltaPct) + '</div></div>' +
@@ -457,6 +566,10 @@
     let refreshToken = null;
     const isStale = function () { return cancelled; };
     function refreshDashboard() {
+      // Lightweight placeholder while watch lifecycle reconciles (OPP-06)
+      if (root && !root.querySelector('.dashboard-shell') && !root.querySelector('.dash-loading')) {
+        root.innerHTML = '<div class="dash-loading empty" style="padding:28px 14px;text-align:center;">در حال آماده‌سازی داشبورد…</div>';
+      }
       renderInto(root, isStale).catch(function (e) { if (!cancelled) console.error('DashboardView refresh failed', e); });
     }
     refreshDashboard();

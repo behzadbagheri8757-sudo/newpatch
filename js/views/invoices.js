@@ -90,6 +90,15 @@
   }
 
   function openNewInvoicePicker() {
+    if (typeof openSearchableCustomerPicker === 'function') {
+      openSearchableCustomerPicker({
+        title: 'فاکتور جدید — انتخاب مشتری',
+        onPick: function (cid) {
+          if (typeof openAddInvoice === 'function') openAddInvoice(cid);
+        }
+      });
+      return;
+    }
     if (!data.customers.length) {
       openSheet(`<h3>مشتری ندارید</h3><div class="empty">اول از بخش مشتریان، یک مشتری ثبت کنید.</div>
         <div class="btn-row"><a class="btn secondary" href="#/customers">رفتن به مشتریان</a></div>`);

@@ -35,6 +35,36 @@
     }
   }
 
+
+  /* PASS 2 — Customer Radar signals (presentation of existing data only) */
+  function radarLastPurchaseDays(cid) {
+    var last = null;
+    var invs = (typeof data !== 'undefined' && data.invoices) ? data.invoices : [];
+    for (var i = 0; i < invs.length; i++) {
+      var inv = invs[i];
+      if (!inv || inv.customerId !== cid || !inv.date) continue;
+      if (!last || String(inv.date) > String(last)) last = inv.date;
+    }
+    if (!last) return null;
+    return typeof daysAgo === 'function' ? daysAgo(last) : null;
+  }
+
+  function radarRecencyLabel(days) {
+    if (days == null || !isFinite(days)) return { text: 'بدون خرید', cls: 'radar-recency-none' };
+    if (days <= 7) return { text: 'اخیر', cls: 'radar-recency-hot' };
+    if (days <= 30) return { text: days + ' روز', cls: 'radar-recency-ok' };
+    if (days <= 60) return { text: days + ' روز', cls: 'radar-recency-warm' };
+    return { text: days + ' روز', cls: 'radar-recency-cold' };
+  }
+
+  function radarWatchFlag(cid) {
+    if (typeof getActiveWatchOccurrences !== 'function') return false;
+    try {
+      var occs = getActiveWatchOccurrences(cid) || [];
+      return occs.length > 0;
+    } catch (e) { return false; }
+  }
+
   function renderCustomerListOnly() {
     const listEl = document.getElementById('customer-list');
     if (!listEl) return;
@@ -97,28 +127,33 @@
         const t = x.t;
         const word = balanceStatusWord(t.balance);
         const color = t.balance > 0 ? 'accent-rust' : t.balance < 0 ? 'accent-olive' : '';
-        const amt = t.balance === 0 ? word : word + ': ' + toman(Math.abs(t.balance)) + ' ت';
+        const amt = t.balance === 0 ? word : toman(Math.abs(t.balance)) + ' ت';
+        const finCls = t.balance > 0 ? 'radar-fin-debt' : t.balance < 0 ? 'radar-fin-credit' : 'radar-fin-ok';
+        const days = radarLastPurchaseDays(c.id);
+        const rec = radarRecencyLabel(days);
+        const hasWatch = radarWatchFlag(c.id);
         const subParts = [];
         if (c.phone) subParts.push(c.phone);
         if (c.region) subParts.push(c.region);
-        if (c.address) subParts.push(c.address);
         const sub = subParts.join(' — ');
         return (
-          '<a class="ledger-row" data-open-customer="' +
+          '<a class="ledger-row radar-row" data-open-customer="' +
           esc(c.id) +
           '" href="' +
           customerHref(c.id) +
           '" style="text-decoration:none;color:inherit;">' +
-          '<span class="name">' +
-          esc(c.name) +
+          '<span class="name radar-main">' +
+          '<span class="radar-name-line">' + esc(c.name) +
+          (hasWatch ? '<span class="radar-watch-dot" title="هشدار فعال" aria-label="هشدار فعال"></span>' : '') +
+          '</span>' +
           (sub ? '<span class="sub">' + esc(sub) + '</span>' : '') +
+          '<span class="radar-signals">' +
+            '<span class="radar-pill ' + finCls + '">' + esc(word) + '</span>' +
+            '<span class="radar-pill ' + rec.cls + '">' + esc(rec.text) + '</span>' +
+          '</span>' +
           '</span>' +
           '<span class="filler"></span>' +
-          '<span class="amount ' +
-          color +
-          '">' +
-          amt +
-          '</span></a>'
+          '<span class="amount ' + color + ' radar-amount">' + amt + '</span></a>'
         );
       })
       .join('');
@@ -134,11 +169,11 @@
       }).join('');
     };
     openSheet(
-      '<h3>فیلتر مشتریان</h3>' +
+      '<h3>فیلتر موقعیت مکانی</h3>' +
       '<div class="field"><label>مسیر</label><select id="customer-filter-route">' + opt(routes, locFilter.routeId, 'همه مسیرها') + '</select></div>' +
       '<div class="field"><label>منطقه</label><select id="customer-filter-region">' + opt(regions, locFilter.regionId, 'همه مناطق') + '</select></div>' +
       '<div class="field"><label>محله</label><select id="customer-filter-neigh" ' + (!locFilter.routeId ? 'disabled' : '') + '>' + opt(neighs, locFilter.neighborhoodId, 'همه محله‌ها') + '</select></div>' +
-      '<div class="btn-row" style="margin-top:4px;"><button type="button" class="btn small secondary" id="customer-filter-clear">پاک کردن فیلتر</button></div>'
+      '<div class="btn-row" style="margin-top:4px;"><button type="button" class="btn small secondary" id="customer-filter-clear">پاک کردن فیلتر موقعیت</button></div>'
     );
 
     const routeSel = document.getElementById('customer-filter-route');
@@ -191,7 +226,7 @@
     if (!el || !btn) return;
     const count = (locFilter.regionId ? 1 : 0) + (locFilter.routeId ? 1 : 0) + (locFilter.neighborhoodId ? 1 : 0) + (locFilter.unassigned ? 1 : 0);
     el.innerHTML = count
-      ? '<span>فیلتر: ' + esc(getLocationDisplayString(locFilter.neighborhoodId || locFilter.routeId || locFilter.regionId)) + '</span><button type="button" class="chip" id="customer-filter-clear-inline">×</button>'
+      ? '<span>موقعیت: ' + esc(getLocationDisplayString(locFilter.neighborhoodId || locFilter.routeId || locFilter.regionId) || (locFilter.unassigned ? 'بدون موقعیت' : '')) + '</span><button type="button" class="chip" id="customer-filter-clear-inline">×</button>'
       : '';
     btn.classList.toggle('active', count > 0);
     const clear = document.getElementById('customer-filter-clear-inline');
@@ -207,12 +242,12 @@
       return '<button type="button" class="chip ' + (custFilter === id ? 'active' : '') + '" data-filter="' + id + '">' + label + '</button>';
     };
     root.innerHTML =
-      '<h2 class="section-title">مشتریان</h2>' +
+      '<h2 class="section-title">رادار مشتریان</h2>' +
       '<div class="field"><input id="customer-search" placeholder="جستجوی نام، آدرس، تلفن، منطقه و…" value="' + esc(custQuery) + '" autocomplete="off"></div>' +
       '<div class="chip-row" id="customer-chips">' + chip('all','همه') + chip('debt','بدهکار') + chip('settled','تسویه') + chip('credit','بستانکار') + '</div>' +
-      '<div class="btn-row" style="margin-bottom:8px;align-items:center;flex-wrap:wrap;">' +
-      '<button type="button" class="btn small secondary" id="customer-filter">فیلتر</button>' +
-      '<button type="button" class="btn small secondary" id="sort-debt">' + (custSortByDebt ? '✓ ' : '') + 'مرتب‌سازی بر اساس بدهی</button>' +
+      '<div class="btn-row" style="margin-bottom:8px;align-items:center;flex-wrap:wrap;gap:8px;">' +
+      '<button type="button" class="btn small secondary' + ((locFilter.regionId || locFilter.routeId || locFilter.neighborhoodId || locFilter.unassigned) ? ' active' : '') + '" id="customer-filter" aria-label="فیلتر موقعیت مکانی">موقعیت</button>' +
+      '<button type="button" class="btn small secondary' + (custSortByDebt ? ' active' : '') + '" id="sort-debt" aria-label="مرتب‌سازی بر اساس بدهی" title="مرتب‌سازی بر اساس بدهی">' + (custSortByDebt ? '✓ ' : '') + 'بدهی ↓</button>' +
       '</div>' +
       '<div id="customer-filter-indicator" class="customer-filter-indicator" aria-live="polite"></div>' +
       '<div id="customer-list"></div>';
@@ -235,7 +270,12 @@
     filterBtn.addEventListener('click', renderLocationFilterSheet);
 
     const sortBtn = document.getElementById('sort-debt');
-    sortHandler = function () { custSortByDebt = !custSortByDebt; sortBtn.textContent = (custSortByDebt ? '✓ ' : '') + 'مرتب‌سازی بر اساس بدهی'; renderCustomerListOnly(); };
+    sortHandler = function () {
+      custSortByDebt = !custSortByDebt;
+      sortBtn.textContent = (custSortByDebt ? '✓ ' : '') + 'بدهی ↓';
+      sortBtn.classList.toggle('active', custSortByDebt);
+      renderCustomerListOnly();
+    };
     sortBtn.addEventListener('click', sortHandler);
 
     const list = document.getElementById('customer-list');

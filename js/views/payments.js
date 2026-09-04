@@ -193,6 +193,15 @@
   }
 
   function openNewPaymentPicker() {
+    if (typeof openSearchableCustomerPicker === 'function') {
+      openSearchableCustomerPicker({
+        title: 'ثبت پرداخت / دریافت — انتخاب مشتری',
+        onPick: function (cid) {
+          if (typeof openAddTransaction === 'function') openAddTransaction(cid);
+        }
+      });
+      return;
+    }
     if (!data.customers.length) {
       openSheet(`
         <h3>مشتری ندارید</h3>

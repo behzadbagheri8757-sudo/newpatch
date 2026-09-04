@@ -69,6 +69,7 @@
     root.innerHTML = `
       <h2 class="section-title">تنظیمات و بکاپ</h2>
 
+      <div class="settings-category-label">داده و پشتیبان‌گیری</div>
       <div class="settings-section">
         <h3>Backup</h3>
         <div class="settings-warn">
@@ -109,6 +110,7 @@
         <div class="card">${autoHtml}</div>
       </div>
 
+      <div class="settings-category-label">موقعیت مکانی</div>
       <div class="settings-section">
         <h3>موقعیت مکانی</h3>
         <div class="sub" style="margin-bottom:8px;font-size:.8rem;line-height:1.5;">
@@ -119,6 +121,7 @@
         </div>
       </div>
 
+      <div class="settings-category-label">فنی / سیستم</div>
       <div class="settings-section">
         <h3>آمار دادهٔ فعلی</h3>
         <div class="cards">
@@ -132,6 +135,7 @@
         </div>
       </div>
 
+      <div class="settings-category-label">امنیت</div>
       <div class="settings-section">
         <h3>قفل PIN</h3>
         <div class="sub" style="margin-bottom:8px;font-size:.8rem;line-height:1.5;">
@@ -148,7 +152,7 @@
 
       <div class="settings-section">
         <div class="settings-tech-row" id="open-tech-info" role="button" tabindex="0">
-          <span class="tech-label">⚙️ اطلاعات فنی</span>
+          <span class="tech-label">اطلاعات فنی</span>
           <span class="tech-chevron">‹</span>
         </div>
       </div>
