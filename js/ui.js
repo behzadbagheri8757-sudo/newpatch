@@ -538,3 +538,79 @@ function openSheet(html){
   document.getElementById('closeX').addEventListener('click', closeModal);
 }
 
+
+// ---------- searchable customer picker (OPP-01 / OPP-05) ----------
+/**
+ * Open a single sheet with searchable customer list, then call onPick(customerId).
+ * Replaces the old plain <select> intermediate step with searchable mobile-friendly UI.
+ * Does not alter business logic of the subsequent action.
+ */
+function openSearchableCustomerPicker(opts){
+  opts = opts || {};
+  const title = opts.title || 'انتخاب مشتری';
+  const onPick = typeof opts.onPick === 'function' ? opts.onPick : function(){};
+  const emptyMsg = opts.emptyMsg || 'اول از بخش مشتریان، یک مشتری ثبت کنید.';
+  const customers = (typeof data !== 'undefined' && Array.isArray(data.customers)) ? data.customers.slice() : [];
+
+  if(!customers.length){
+    openSheet(
+      '<h3>' + esc(title) + '</h3>' +
+      '<div class="empty">' + esc(emptyMsg) + '</div>' +
+      '<div class="btn-row"><a class="btn secondary" href="#/customers">رفتن به مشتریان</a></div>'
+    );
+    return;
+  }
+
+  customers.sort(function(a,b){ return (a.name||'').localeCompare(b.name||'','fa'); });
+
+  openSheet(
+    '<h3>' + esc(title) + '</h3>' +
+    '<div class="field"><input id="cust-pick-search" type="search" placeholder="جستجوی نام، تلفن، منطقه…" autocomplete="off"></div>' +
+    '<div id="cust-pick-list" class="cust-pick-list" style="max-height:52vh;overflow-y:auto;-webkit-overflow-scrolling:touch;"></div>'
+  );
+
+  const listEl = document.getElementById('cust-pick-list');
+  const searchEl = document.getElementById('cust-pick-search');
+
+  function draw(q){
+    if(!listEl) return;
+    const qq = String(q||'').trim().toLowerCase();
+    const rows = customers.filter(function(c){
+      if(c.active === false) return false;
+      if(!qq) return true;
+      return (c.name||'').toLowerCase().includes(qq) ||
+        (c.phone||'').includes(qq) ||
+        (c.ownerName||'').toLowerCase().includes(qq) ||
+        (c.region||'').toLowerCase().includes(qq) ||
+        (c.address||'').toLowerCase().includes(qq);
+    });
+    if(!rows.length){
+      listEl.innerHTML = '<div class="empty" style="padding:16px 0;">موردی پیدا نشد</div>';
+      return;
+    }
+    listEl.innerHTML = rows.map(function(c){
+      const sub = [c.phone, c.region, c.ownerName].filter(Boolean).join(' — ');
+      return '<button type="button" class="ledger-row cust-pick-row" data-pick-cid="' + esc(c.id) + '" style="width:100%;text-align:right;border:none;background:transparent;cursor:pointer;font:inherit;color:inherit;">' +
+        '<span class="name">' + esc(c.name||'—') + (sub ? '<span class="sub">' + esc(sub) + '</span>' : '') + '</span>' +
+        '<span class="filler"></span>' +
+        '<span class="amount" style="font-size:.85rem;color:var(--color-text-muted);">انتخاب</span>' +
+      '</button>';
+    }).join('');
+  }
+
+  draw('');
+  if(searchEl){
+    searchEl.addEventListener('input', function(){ draw(searchEl.value); });
+    try{ searchEl.focus(); }catch(e){}
+  }
+  if(listEl){
+    listEl.addEventListener('click', function(e){
+      const btn = e.target.closest('[data-pick-cid]');
+      if(!btn) return;
+      const cid = btn.getAttribute('data-pick-cid');
+      closeModal();
+      onPick(cid);
+    });
+  }
+}
+
