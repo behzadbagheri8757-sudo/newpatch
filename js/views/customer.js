@@ -836,7 +836,7 @@
         '</details>';
     }
 
-    // PASS 2 — Customer 360 hierarchy (presentation only)
+    // PASS 2B — Customer 360 visual masthead (presentation only)
     var summary = null;
     try {
       if (typeof customerBehavior === 'function') {
@@ -846,114 +846,106 @@
 
     var healthLevel = (summary && summary.level) ? summary.level : 'normal';
     var healthLabel = {
-      risk: 'نیاز به توجه',
-      watch: 'قابل بررسی',
-      good: 'وضعیت مطلوب',
-      normal: 'عادی',
-      insufficient: 'دادهٔ کافی نیست'
+      risk: 'نیاز به توجه', watch: 'قابل بررسی', good: 'وضعیت مطلوب',
+      normal: 'عادی', insufficient: 'دادهٔ کافی نیست'
     }[healthLevel] || 'عادی';
-    var healthCls = {
-      risk: 'c360-health-risk',
-      watch: 'c360-health-watch',
-      good: 'c360-health-good',
-      normal: 'c360-health-normal',
-      insufficient: 'c360-health-normal'
-    }[healthLevel] || 'c360-health-normal';
 
     var nextActionText = null;
     if (summary && summary.action) nextActionText = summary.action;
     else if (summary && summary.reminder) nextActionText = summary.reminder;
-
     var riskLines = (summary && summary.risk && summary.risk.length) ? summary.risk.slice(0, 2) : [];
     var goodLines = (summary && summary.good && summary.good.length) ? summary.good.slice(0, 1) : [];
 
     var locLine = c.locationId
       ? esc(getLocationDisplayString(c.locationId))
       : [c.region, c.route].filter(Boolean).map(esc).join(' — ');
-
     var identityMeta = [];
     if (c.ownerName) identityMeta.push(esc(c.ownerName));
     if (c.phone) identityMeta.push(esc(c.phone));
     if (locLine) identityMeta.push(locLine);
 
+    var daysSince = null;
+    try {
+      if (typeof customerBehavior === 'function') {
+        var bb = customerBehavior(c.id);
+        if (bb && bb.daysSinceLast != null && isFinite(bb.daysSinceLast)) daysSince = Math.round(bb.daysSinceLast);
+      }
+    } catch (eD) {}
+    var recencyBit = daysSince == null ? '' : (daysSince <= 0 ? 'امروز' : (daysSince + ' روز پیش'));
+
     root.innerHTML =
-      '<div class="btn-row" style="margin-bottom:10px;">' +
-      '<a class="btn secondary small" href="' + customersHref() + '">← مشتریان</a></div>' +
+      '<div class="c360-back"><a class="c360-back-link" href="' + customersHref() + '">‹ مشتریان</a></div>' +
 
-      /* IDENTITY */
-      '<div class="c360-hero card">' +
-        '<div class="c360-hero-top">' +
-          '<div class="c360-identity">' +
-            '<div class="c360-name">' + esc(c.name) +
-              (c.active === false ? ' <span class="badge pending">غیرفعال</span>' : '') +
-            '</div>' +
-            (identityMeta.length ? '<div class="c360-meta">' + identityMeta.join(' · ') + '</div>' : '') +
-          '</div>' +
-          '<div class="c360-health ' + healthCls + '">' +
-            '<div class="c360-health-label">سلامت خرید</div>' +
-            '<div class="c360-health-value">' + esc(healthLabel) + '</div>' +
-          '</div>' +
+      /* MASTHEAD */
+      '<section class="c360-masthead">' +
+        '<div class="c360-mast-name">' + esc(c.name) +
+          (c.active === false ? ' <span class="badge pending">غیرفعال</span>' : '') +
         '</div>' +
-        '<div class="c360-balance-row">' +
-          '<div class="label">مانده حساب</div>' +
-          '<div class="value ' + color + ' c360-balance">' + balanceLine + '</div>' +
+        (identityMeta.length ? '<div class="c360-mast-meta">' + identityMeta.join(' · ') + '</div>' : '') +
+        '<div class="c360-mast-status">' +
+          '<span class="c360-st ' + color + '">' + balanceLine + '</span>' +
+          '<span class="c360-st c360-st-health">' + esc(healthLabel) + '</span>' +
+          (recencyBit ? '<span class="c360-st">' + esc(recencyBit) + '</span>' : '') +
         '</div>' +
-      '</div>' +
+      '</section>' +
 
-      /* FINANCIAL SNAPSHOT */
-      '<div class="c360-fin cards">' +
-        '<div class="card"><div class="label">خرید کل</div><div class="value c360-fin-val">' + toman(t.invTotal) + '</div></div>' +
-        '<div class="card"><div class="label">پرداخت‌ها</div><div class="value c360-fin-val">' + toman(t.payTotal) + '</div></div>' +
-        '<div class="card"><div class="label">چک‌ها</div><div class="value c360-fin-val">' + toman(t.checkTotal) + '</div></div>' +
-        '<div class="card"><div class="label">سود</div><div class="value c360-fin-val accent-amber">' + toman(profit) + '</div></div>' +
-      '</div>' +
+      /* FINANCIAL SUMMARY — one component */
+      '<section class="c360-finpanel">' +
+        '<div class="c360-fin-row"><span>جمع خرید</span><span>' + toman(t.invTotal) + ' ت</span></div>' +
+        '<div class="c360-fin-row"><span>جمع پرداخت</span><span>' + toman(t.payTotal) + ' ت</span></div>' +
+        '<div class="c360-fin-row"><span>جمع چک</span><span>' + toman(t.checkTotal) + ' ت</span></div>' +
+        '<div class="c360-fin-row c360-fin-profit"><span>سود</span><span class="accent-amber">' + toman(profit) + ' ت</span></div>' +
+      '</section>' +
 
-      /* RISK / OPPORTUNITY */
+      /* INSIGHT */
       ((riskLines.length || goodLines.length || nextActionText) ? (
-        '<div class="c360-insight card">' +
-          (riskLines.length ? '<div class="c360-insight-block c360-risk">' +
-            '<div class="c360-insight-title">ریسک / توجه</div>' +
-            riskLines.map(function (x) { return '<div class="c360-insight-line">• ' + esc(x) + '</div>'; }).join('') +
-          '</div>' : '') +
-          (goodLines.length ? '<div class="c360-insight-block c360-good">' +
-            '<div class="c360-insight-title">نقطه قوت</div>' +
-            goodLines.map(function (x) { return '<div class="c360-insight-line">• ' + esc(x) + '</div>'; }).join('') +
-          '</div>' : '') +
-          (nextActionText ? '<div class="c360-next">' +
-            '<div class="c360-insight-title">اقدام پیشنهادی</div>' +
-            '<div class="c360-next-text">' + esc(nextActionText) + '</div>' +
-          '</div>' : '') +
-        '</div>'
+        '<section class="c360-insight-panel">' +
+          (riskLines.length ? '<div class="c360-ins-risk"><div class="c360-ins-h">ریسک</div>' +
+            riskLines.map(function (x) { return '<div class="c360-ins-line">' + esc(x) + '</div>'; }).join('') + '</div>' : '') +
+          (goodLines.length ? '<div class="c360-ins-good"><div class="c360-ins-h">نقطه قوت</div>' +
+            goodLines.map(function (x) { return '<div class="c360-ins-line">' + esc(x) + '</div>'; }).join('') + '</div>' : '') +
+          (nextActionText ? '<div class="c360-ins-next"><div class="c360-ins-h">اقدام بعدی</div><div class="c360-ins-next-t">' + esc(nextActionText) + '</div></div>' : '') +
+        '</section>'
       ) : '') +
 
-      /* PRIMARY ACTIONS — customer context already known */
-      '<div class="c360-actions">' +
-        '<button type="button" class="btn" id="act-invoice">فاکتور</button>' +
-        '<button type="button" class="btn secondary" id="act-pay">دریافت</button>' +
-        '<button type="button" class="btn secondary" id="act-visit">ویزیت</button>' +
-        '<button type="button" class="btn secondary" id="act-check">چک</button>' +
+      /* PRIMARY ACTION BAR */
+      '<div class="c360-abar">' +
+        '<button type="button" class="c360-abar-btn c360-abar-primary" id="act-invoice">فاکتور</button>' +
+        '<button type="button" class="c360-abar-btn" id="act-pay">دریافت</button>' +
+        '<button type="button" class="c360-abar-btn" id="act-visit">ویزیت</button>' +
+        '<button type="button" class="c360-abar-btn" id="act-check">چک</button>' +
       '</div>' +
-      '<details class="c360-more-actions">' +
+      '<details class="c360-secondary">' +
         '<summary>عملیات بیشتر</summary>' +
-        '<div class="btn-row" style="margin:8px 0 12px;">' +
-          '<button type="button" class="btn small secondary" id="act-edit">ویرایش</button>' +
-          '<button type="button" class="btn small secondary" id="act-location">موقعیت</button>' +
-          '<button type="button" class="btn small secondary" id="act-print-statement">صورت‌حساب</button>' +
-          '<button type="button" class="btn small secondary" id="act-toggle-active">' + (c.active === false ? 'فعال‌سازی' : 'غیرفعال‌سازی') + '</button>' +
+        '<div class="c360-sec-row">' +
+          '<button type="button" class="c360-sec-btn" id="act-edit">ویرایش</button>' +
+          '<button type="button" class="c360-sec-btn" id="act-location">موقعیت</button>' +
+          '<button type="button" class="c360-sec-btn" id="act-print-statement">صورت‌حساب</button>' +
+          '<button type="button" class="c360-sec-btn" id="act-toggle-active">' + (c.active === false ? 'فعال‌سازی' : 'غیرفعال‌سازی') + '</button>' +
         '</div>' +
       '</details>' +
 
       behaviorHtml +
       productRejectionInsightsHtml(c.id) +
 
-      '<h3 class="sub-title">فاکتورها (' + invs.length + ')</h3>' + invRows +
-      '<h3 class="sub-title">پرداخت‌ها (' + pays.length + ')</h3>' + payRows +
-      '<h3 class="sub-title">چک‌ها (' + chks.length + ')</h3>' + chkRows +
-      '<h3 class="sub-title">ویزیت‌ها (' + visits.length + ')</h3>' +
-      '<div class="btn-row" style="margin-bottom:8px;">' +
-      '<button type="button" class="btn small" id="act-visit-section">ثبت ویزیت</button>' +
-      '<a class="btn small secondary" href="#/visits">همه ویزیت‌ها</a></div>' +
-      visitRows;
+      /* HISTORY tabs */
+      '<section class="c360-hist">' +
+        '<div class="seg-control c360-hist-tabs" role="tablist">' +
+          '<button type="button" class="seg-btn is-active" data-hist-tab="inv" role="tab">فاکتورها (' + invs.length + ')</button>' +
+          '<button type="button" class="seg-btn" data-hist-tab="pay" role="tab">پرداخت‌ها (' + pays.length + ')</button>' +
+          '<button type="button" class="seg-btn" data-hist-tab="chk" role="tab">چک‌ها (' + chks.length + ')</button>' +
+          '<button type="button" class="seg-btn" data-hist-tab="visit" role="tab">ویزیت‌ها (' + visits.length + ')</button>' +
+        '</div>' +
+        '<div class="c360-hist-panel" data-hist-panel="inv">' + invRows + '</div>' +
+        '<div class="c360-hist-panel" data-hist-panel="pay" hidden>' + payRows + '</div>' +
+        '<div class="c360-hist-panel" data-hist-panel="chk" hidden>' + chkRows + '</div>' +
+        '<div class="c360-hist-panel" data-hist-panel="visit" hidden>' +
+          '<div class="btn-row" style="margin-bottom:8px;">' +
+            '<button type="button" class="btn small" id="act-visit-section">ثبت ویزیت</button>' +
+            '<a class="btn small secondary" href="#/visits">همه ویزیت‌ها</a></div>' +
+          visitRows +
+        '</div>' +
+      '</section>';
 
     document.getElementById('act-invoice').onclick = function () {
       openAddInvoice(c.id);
@@ -1010,6 +1002,20 @@
     }
     bindWatchLifecycleRows(root);
     bindHistoryToggles(root);
+    root.querySelectorAll('[data-hist-tab]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var key = btn.getAttribute('data-hist-tab');
+        root.querySelectorAll('[data-hist-tab]').forEach(function (b) {
+          var on = b.getAttribute('data-hist-tab') === key;
+          b.classList.toggle('is-active', on);
+          b.setAttribute('aria-selected', on ? 'true' : 'false');
+        });
+        root.querySelectorAll('[data-hist-panel]').forEach(function (panel) {
+          panel.hidden = panel.getAttribute('data-hist-panel') !== key;
+        });
+      });
+    });
+
   }
 
   function mount(root, params) {

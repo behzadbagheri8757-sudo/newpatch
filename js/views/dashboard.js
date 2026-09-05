@@ -97,16 +97,15 @@
   }
 
   function quickActionsHtml() {
-    const gameShortcut = '<a class="section-action" href="#/game">Sales Game ←</a>';
-    return '<div class="dashboard-block">' +
-      '<div class="dashboard-block-head"><div class="dash-section-label"><span class="dash-section-ico" aria-hidden="true">' + ICO.quick + '</span><span>اقدام سریع</span></div>' + gameShortcut + '</div>' +
-      '<div class="dash-quick-actions">' +
-        '<button type="button" class="dash-qa-btn" data-qa="invoice"><span class="dash-qa-ico" aria-hidden="true">' + ICO.invoice + '</span><span class="dash-qa-label">فاکتور جدید</span></button>' +
-        '<button type="button" class="dash-qa-btn" data-qa="payment"><span class="dash-qa-ico" aria-hidden="true">' + ICO.card + '</span><span class="dash-qa-label">ثبت دریافت</span></button>' +
-        '<button type="button" class="dash-qa-btn" data-qa="visit"><span class="dash-qa-ico" aria-hidden="true">' + ICO.map + '</span><span class="dash-qa-label">ثبت ویزیت</span></button>' +
-        '<a class="dash-qa-btn" href="#/evaluation"><span class="dash-qa-ico" aria-hidden="true">' + ICO.shop + '</span><span class="dash-qa-label">ارزیابی مغازه</span></a>' +
-      '</div>' +
-    '</div>';
+    return '<section class="cc-block">' +
+      '<div class="cc-block-head"><div class="cc-block-label">اقدام سریع</div>' +
+        '<a class="cc-block-link" href="#/game">Sales Game</a></div>' +
+      '<div class="cc-toolbar dash-quick-actions">' +
+        '<button type="button" class="cc-tool" data-qa="invoice"><span class="cc-tool-ico" aria-hidden="true">' + ICO.invoice + '</span><span class="cc-tool-label">فاکتور</span></button>' +
+        '<button type="button" class="cc-tool" data-qa="payment"><span class="cc-tool-ico" aria-hidden="true">' + ICO.card + '</span><span class="cc-tool-label">دریافت</span></button>' +
+        '<button type="button" class="cc-tool" data-qa="visit"><span class="cc-tool-ico" aria-hidden="true">' + ICO.map + '</span><span class="cc-tool-label">ویزیت</span></button>' +
+        '<a class="cc-tool" href="#/evaluation"><span class="cc-tool-ico" aria-hidden="true">' + ICO.shop + '</span><span class="cc-tool-label">ارزیابی</span></a>' +
+      '</div></section>';
   }
 
   function bindQuickActions(root) {
@@ -143,14 +142,9 @@
       }
     } catch (e) { return ''; }
     if (!items.length) {
-      return '<div class="dashboard-block">' +
-        dashSectionHead(ICO.actions, 'کارهای پیشنهادی امروز', '', '') +
-        '<div class="dash-activity">' +
-          '<div class="empty" style="padding:18px 8px;text-align:center;">' +
-            '<div style="font-weight:700;color:#1F2429;margin-bottom:4px;">امروز کار ضروری نداری</div>' +
-            '<div class="sub" style="opacity:.85;">وضعیت مشتری‌ها و پتانسیل‌ها تحت کنترل است.</div>' +
-          '</div>' +
-        '</div></div>';
+      return '<section class="cc-block">' +
+        '<div class="cc-block-label">اقدام بعدی</div>' +
+        '<div class="cc-task-list"><div class="cc-empty">امروز کار ضروری نداری<br><span class="cc-empty-sub">وضعیت تحت کنترل است</span></div></div></section>';
     }
 
     // Max Top 5 by unifiedScore (already sorted by calculateAllActions)
@@ -189,11 +183,10 @@
       if (whyNow) {
         lines.push('<span class="action-why-now"><span class="action-meta-label-now">الان:</span> ' + esc(whyNow) + '</span>');
       }
-      return '<a class="ledger-row action-row action-row-' + esc(urgency) + '" href="' + href + '">' +
-        '<span class="amount action-urgency action-urgency-' + esc(urgency) + '" aria-label="اولویت ' + esc(urgency) + '">' + icon + '</span>' +
-        '<span class="name action-content">' + lines.join('') + '</span>' +
-        '<span class="filler"></span>' +
-      '</a>';
+      return '<a class="cc-task-row action-row-' + esc(urgency) + '" href="' + href + '">' +
+        '<span class="cc-task-rail action-urgency-' + esc(urgency) + '" aria-hidden="true"></span>' +
+        '<span class="cc-task-body">' + lines.join('') + '</span>' +
+        '<span class="cc-task-chevron" aria-hidden="true">‹</span></a>';
     }
 
     const visibleRows = visibleItems.map(renderRow).join('');
@@ -215,7 +208,7 @@
       ? '<span class="dash-risk-badge" title="تعداد موارد بحرانی/پراهمیت در همین لیست">' + riskCount + ' مورد مهم</span>'
       : '';
 
-    return '<div class="dashboard-block">' + dashSectionHead(ICO.actions, 'کارهای پیشنهادی امروز', '', '', riskBadge) + '<div class="dash-activity dash-action-queue">' + visibleRows + hiddenBlock + '</div></div>';
+    return '<section class="cc-block"><div class="cc-block-head"><div class="cc-block-label">اقدام بعدی</div>' + (riskBadge || '') + '</div><div class="cc-task-list dash-action-queue">' + visibleRows + hiddenBlock + '</div></section>';
   }
 
   /* Toggles the collapsed remainder of the Action Queue (items 3-5).
@@ -297,9 +290,9 @@
     if (!invs.length) return '';
     const rows = invs.map(function (inv) {
       const cust = (data.customers || []).find(function (c) { return c.id === inv.customerId; });
-      return '<a class="ledger-row" href="#/invoice?id=' + encodeURIComponent(inv.id) + '"><span class="name">فاکتور #' + esc(String(inv.number || '')) + '<span class="sub">' + esc(cust ? cust.name : '—') + ' — ' + faDate(inv.date) + '</span></span><span class="filler"></span><span class="amount">' + money(inv.total) + '</span></a>';
+      return '<a class="cc-tl-row" href="#/invoice?id=' + encodeURIComponent(inv.id) + '">' + '<span class="cc-tl-kind">فاکتور</span>' + '<span class="cc-tl-main">' + esc(cust ? cust.name : '—') + '<span class="cc-tl-sub">#' + esc(String(inv.number || '')) + ' · ' + faDate(inv.date) + '</span></span>' + '<span class="cc-tl-amt">' + money(inv.total) + '</span></a>';
     }).join('');
-    return '<div class="dashboard-block">' + dashSectionHead(ICO.invoiceSection, 'آخرین فاکتورها', '#/invoices', 'همه ←') + '<div class="dash-activity">' + rows + '</div></div>';
+    return '<section class="cc-block"><div class="cc-block-head"><div class="cc-block-label">آخرین فاکتورها</div><a class="cc-block-link" href="#/invoices">همه</a></div><div class="cc-timeline">' + rows + '</div></section>';
   }
 
   function recentVisitsHtml() {
@@ -311,9 +304,9 @@
     const top = items.slice(0, 5);
     if (!top.length) return '';
     const rows = top.map(function (v) {
-      return '<a class="ledger-row" href="#/customer?id=' + encodeURIComponent(v.customerId) + '"><span class="name">' + esc(v.name) + '<span class="sub">' + faDate(v.date) + (v.time ? ' ' + esc(v.time) : '') + (v.result ? ' — ' + esc(v.result) : '') + '</span></span><span class="filler"></span><span class="amount">ویزیت</span></a>';
+      return '<a class="cc-tl-row" href="#/customer?id=' + encodeURIComponent(v.customerId) + '">' + '<span class="cc-tl-kind">ویزیت</span>' + '<span class="cc-tl-main">' + esc(v.name) + '<span class="cc-tl-sub">' + faDate(v.date) + (v.result ? ' · ' + esc(v.result) : '') + '</span></span>' + '<span class="cc-tl-amt">›</span></a>';
     }).join('');
-    return '<div class="dashboard-block">' + dashSectionHead(ICO.visitSection, 'آخرین ویزیت‌ها', '#/visits', 'همه ←') + '<div class="dash-activity">' + rows + '</div></div>';
+    return '<section class="cc-block"><div class="cc-block-head"><div class="cc-block-label">آخرین ویزیت‌ها</div><a class="cc-block-link" href="#/visits">همه</a></div><div class="cc-timeline">' + rows + '</div></section>';
   }
 
   function targetHtml(metrics) {
@@ -328,10 +321,10 @@
     let figuresHtml = '';
     let statusRowHtml = '';
     if (target > 0) {
-      figuresHtml = '<div class="dmt-figures"><span class="dmt-figures-num">' + toman(sales) + '</span>' +
-        ' <span class="dmt-figures-sep">از</span> ' +
-        '<span class="dmt-figures-num">' + toman(target) + '</span>' +
-        ' <span class="dmt-figures-unit">تومان</span></div>';
+      figuresHtml = '<div class="cc-target-figures"><span class="cc-target-figures-num">' + toman(sales) + '</span>' +
+        ' <span class="cc-target-figures-sep">از</span> ' +
+        '<span class="cc-target-figures-num">' + toman(target) + '</span>' +
+        ' <span class="cc-target-figures-unit">تومان</span></div>';
 
       if (!done) {
         const monthLen = (metrics.jy && metrics.jm && typeof jalaliMonthLength === 'function')
@@ -348,13 +341,13 @@
           else statusMeta = { cls: 'ontrack', icon: '✓', text: 'روی برنامه' };
           if (daysLeft > 0) {
             const requiredDaily = Math.round(remaining / daysLeft);
-            paceHtml = '<span class="dmt-pace">نیاز روزانه ' + toman(requiredDaily) + ' ت' +
-              ' <span class="dmt-pace-days">(' + daysLeft + ' روز مانده)</span></span>';
+            paceHtml = '<span class="cc-target-pace">نیاز روزانه ' + toman(requiredDaily) + ' ت' +
+              ' <span class="cc-target-pace-days">(' + daysLeft + ' روز مانده)</span></span>';
           }
         }
         if (statusMeta) {
-          statusRowHtml = '<div class="dmt-status-row">' +
-            '<span class="dmt-status-chip dmt-status-' + statusMeta.cls + '">' + statusMeta.icon + ' ' + statusMeta.text + '</span>' +
+          statusRowHtml = '<div class="cc-target-status">' +
+            '<span class="cc-target-chip cc-target-' + statusMeta.cls + '">' + statusMeta.icon + ' ' + statusMeta.text + '</span>' +
             paceHtml +
             '</div>';
         }
@@ -362,28 +355,26 @@
     }
 
     return (
-      '<div class="dash-target-block">' +
-        '<div class="dash-target-fab-row">' +
-          '<button type="button" class="dash-target-fab" data-monthly-target aria-label="تنظیم هدف فروش">' +
+      '<div class="cc-target-wrap">' +
+        '<div class="cc-target-edit-row">' +
+          '<button type="button" class="cc-target-edit" data-monthly-target aria-label="تنظیم هدف فروش">' +
             ICO.target +
           '</button>' +
         '</div>' +
-        '<div class="dash-monthly-target ' + (done ? 'is-done' : '') + '">' +
-          '<div class="dmt-top">' +
-            '<div class="dmt-heading">' +
-              '<span class="dmt-growth" aria-hidden="true">' + ICO.growth + '</span>' +
-              '<span class="dmt-title">هدف فروش این ماه</span>' +
+        '<div class="cc-target ' + (done ? 'is-done' : '') + '">' +
+          '<div class="cc-target-top">' +
+            '<div class="cc-target-heading">' +
+              '<span class="cc-target-growth" aria-hidden="true">' + ICO.growth + '</span>' +
+              '<span class="cc-target-title">هدف فروش این ماه</span>' +
             '</div>' +
           '</div>' +
           figuresHtml +
-          '<div class="dmt-row">' +
-            '<div class="dmt-progress"><div class="dmt-bar"><span style="width:' + capped + '%"></span></div></div>' +
-            '<span class="dmt-pct">' + (target > 0 ? pct + '٪' : '—') + '</span>' +
+          '<div class="cc-target-row">' +
+            '<div class="cc-target-progress"><div class="cc-target-bar"><span style="width:' + capped + '%"></span></div></div>' +
+            '<span class="cc-target-pct">' + (target > 0 ? pct + '٪' : '—') + '</span>' +
           '</div>' +
           statusRowHtml +
-        '</div>' +
-      '</div>'
-    );
+        '</div></section>');
   }
 
   function bindMonthlyTarget(root, refresh) {
@@ -428,35 +419,22 @@
   /* ---- PASS 2: Command Center attention + today strip (UI only; existing data) ---- */
   function attentionHtml() {
     var items = [];
-    // Due checks
     try {
       if (typeof checksDueSoon === 'function') {
         var due = checksDueSoon() || [];
         if (due.length) {
-          items.push({
-            href: '#/checks?filter=dueSoon',
-            cls: 'cc-attn-warn',
-            label: due.length + ' چک نزدیک سررسید',
-            sub: 'نیاز به پیگیری'
-          });
+          items.push({ href: '#/checks?filter=dueSoon', sev: 'warn', mark: '!', label: due.length + ' چک نزدیک سررسید', sub: 'نیاز به پیگیری' });
         }
       }
     } catch (e) {}
-    // Low stock
     try {
       if (typeof lowStockProducts === 'function') {
         var low = lowStockProducts() || [];
         if (low.length) {
-          items.push({
-            href: '#/products',
-            cls: 'cc-attn-danger',
-            label: low.length + ' کالای رو به اتمام',
-            sub: 'موجودی'
-          });
+          items.push({ href: '#/products', sev: 'danger', mark: '▲', label: low.length + ' کالای رو به اتمام', sub: 'بررسی موجودی' });
         }
       }
     } catch (e) {}
-    // Active watches
     try {
       var wCount = 0;
       if (typeof getWatchLifecycleSummary === 'function') {
@@ -466,55 +444,39 @@
         wCount = (getActiveWatchOccurrences() || []).length;
       }
       if (wCount > 0) {
-        items.push({
-          href: '#/watches',
-          cls: 'cc-attn-watch',
-          label: wCount + ' هشدار زودهنگام',
-          sub: 'بررسی مشتری'
-        });
+        items.push({ href: '#/watches', sev: 'watch', mark: '●', label: wCount + ' هشدار فعال', sub: 'نیاز به توجه' });
       }
     } catch (e) {}
-    // Customer debt signal
     try {
       var g = globalTotals();
       var debtors = typeof debtorList === 'function' ? debtorList(9999) : [];
       if (g && g.customerDebt > 0 && debtors.length) {
-        items.push({
-          href: '#/customers?filter=debt',
-          cls: 'cc-attn-debt',
-          label: debtors.length + ' مشتری بدهکار',
-          sub: toman(Math.round(g.customerDebt)) + ' ت'
-        });
+        items.push({ href: '#/customers?filter=debt', sev: 'debt', mark: '●', label: debtors.length + ' مشتری بدهکار', sub: toman(Math.round(g.customerDebt)) + ' ت' });
       }
     } catch (e) {}
-
     if (!items.length) return '';
-    var chips = items.slice(0, 4).map(function (it) {
-      return '<a class="cc-attn-chip ' + it.cls + '" href="' + it.href + '">' +
-        '<span class="cc-attn-label">' + esc(it.label) + '</span>' +
-        (it.sub ? '<span class="cc-attn-sub">' + esc(it.sub) + '</span>' : '') +
-      '</a>';
+    var rows = items.slice(0, 5).map(function (it) {
+      return '<a class="cc-prio-row cc-prio-' + it.sev + '" href="' + it.href + '">' +
+        '<span class="cc-prio-rail" aria-hidden="true"></span>' +
+        '<span class="cc-prio-mark" aria-hidden="true">' + esc(it.mark) + '</span>' +
+        '<span class="cc-prio-body"><span class="cc-prio-label">' + esc(it.label) + '</span>' +
+        (it.sub ? '<span class="cc-prio-sub">' + esc(it.sub) + '</span>' : '') + '</span>' +
+        '<span class="cc-prio-chevron" aria-hidden="true">‹</span></a>';
     }).join('');
-    return '<div class="dashboard-block cc-attention">' +
-      dashSectionHead(ICO.actions, 'نیاز به توجه', '', '') +
-      '<div class="cc-attn-row">' + chips + '</div></div>';
+    return '<section class="cc-block"><div class="cc-block-label">اولویت امروز</div><div class="cc-prio-list">' + rows + '</div></section>';
   }
 
   function todayStripHtml(g, metrics) {
     var todaySales = (g && g.todaySales != null) ? g.todaySales : 0;
     var todayCount = (g && g.todayCount != null) ? g.todayCount : 0;
     var monthSales = (metrics && metrics.mtdSales != null) ? metrics.mtdSales : ((g && g.monthSales) || 0);
-    return '<div class="cc-today-strip">' +
-      '<div class="cc-today-main">' +
-        '<div class="cc-today-kicker">امروز</div>' +
-        '<div class="cc-today-value">' + money(todaySales) + '</div>' +
-        '<div class="cc-today-sub">' + (todayCount ? (todayCount + ' فاکتور') : 'هنوز فروشی ثبت نشده') + '</div>' +
-      '</div>' +
-      '<div class="cc-today-side">' +
-        '<div class="cc-today-side-label">فروش ماه</div>' +
-        '<div class="cc-today-side-value">' + money(monthSales) + '</div>' +
-      '</div>' +
-    '</div>';
+    return '<section class="cc-hero">' +
+      '<div class="cc-hero-kicker">امروز</div>' +
+      '<div class="cc-hero-value">' + money(todaySales) + '</div>' +
+      '<div class="cc-hero-meta">' +
+        (todayCount ? (todayCount + ' فاکتور · فروش امروز') : 'هنوز فروشی ثبت نشده') +
+        ' · ماه: ' + money(monthSales) +
+      '</div></section>';
   }
 
   async function renderInto(root, isStale) {
@@ -533,22 +495,20 @@
     var watchBlock = attn ? '' : watchSummaryHtml();
     root.innerHTML =
       '<div class="dashboard-shell">' +
-      '<div class="cc-head">' +
-        '<h2 class="section-title" style="margin-bottom:2px;">مرکز فرماندهی</h2>' +
-        '<div class="dashboard-eyebrow">وضعیت امروز · اقدام بعدی · نمای کلی</div>' +
-      '</div>' +
       todayStripHtml(g, metrics) +
       attn +
       todaysActionsHtml() +
       targetHtml(metrics) +
       watchBlock +
-      '<div class="dashboard-block">' + dashSectionHead(ICO.summary, 'نمای کلی کسب‌وکار', '#/reports', 'گزارش‌ها ←') +
-      '<div class="dash-kpis">' +
-      '<a class="dash-kpi sales dash-kpi-link" href="#/reports"><div class="dash-kpi-label">فروش این ماه</div><div class="dash-kpi-value sales">' + money(metrics.mtdSales) + '</div><div class="dash-kpi-sub">' + deltaHtml(metrics.salesDeltaPct) + '</div><span class="dash-kpi-chevron" aria-hidden="true">‹</span></a>' +
-      '<div class="dash-kpi profit"><div class="dash-kpi-label">سود این ماه</div><div class="dash-kpi-value profit">' + money(metrics.mtdProfit) + '</div><div class="dash-kpi-sub">' + deltaHtml(metrics.profitDeltaPct) + '</div></div>' +
-      '<div class="dash-kpi inventory"><div class="dash-kpi-label">ارزش موجودی انبار</div><div class="dash-kpi-value">' + money(invVal) + '</div><div class="dash-kpi-sub">ارزش فعلی موجودی</div></div>' +
-      '<a class="dash-kpi debt dash-kpi-link" href="#/customers?filter=debt"><div class="dash-kpi-label">بدهی مشتریان</div><div class="dash-kpi-value debt">' + money(g.customerDebt) + '</div><div class="dash-kpi-sub">' + debtorList(9999).length + ' بدهکار فعال</div><span class="dash-kpi-chevron" aria-hidden="true">‹</span></a>' +
-      '</div></div>' +
+      '<section class="cc-block">' +
+        '<div class="cc-block-head"><div class="cc-block-label">نمای کسب‌وکار</div><a class="cc-block-link" href="#/reports">گزارش‌ها</a></div>' +
+        '<div class="cc-scoreboard">' +
+          '<a class="cc-sb-cell" href="#/reports"><span class="cc-sb-label">فروش ماه</span><span class="cc-sb-value cc-sb-sales">' + money(metrics.mtdSales) + '</span><span class="cc-sb-delta">' + deltaHtml(metrics.salesDeltaPct) + '</span></a>' +
+          '<div class="cc-sb-cell"><span class="cc-sb-label">سود ماه</span><span class="cc-sb-value cc-sb-profit">' + money(metrics.mtdProfit) + '</span><span class="cc-sb-delta">' + deltaHtml(metrics.profitDeltaPct) + '</span></div>' +
+          '<a class="cc-sb-cell" href="#/customers?filter=debt"><span class="cc-sb-label">بدهی</span><span class="cc-sb-value cc-sb-debt">' + money(g.customerDebt) + '</span><span class="cc-sb-delta">' + debtorList(9999).length + ' بدهکار</span></a>' +
+        '</div>' +
+        '<div class="cc-sb-foot">موجودی انبار · ' + money(invVal) + '</div>' +
+      '</section>' +
       quickActionsHtml() +
       recentInvoicesHtml() + recentVisitsHtml() +
       '</div>';

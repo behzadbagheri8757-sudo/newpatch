@@ -137,23 +137,22 @@
         if (c.region) subParts.push(c.region);
         const sub = subParts.join(' — ');
         return (
-          '<a class="ledger-row radar-row" data-open-customer="' +
+          '<a class="radar-card" data-open-customer="' +
           esc(c.id) +
           '" href="' +
           customerHref(c.id) +
-          '" style="text-decoration:none;color:inherit;">' +
-          '<span class="name radar-main">' +
-          '<span class="radar-name-line">' + esc(c.name) +
-          (hasWatch ? '<span class="radar-watch-dot" title="هشدار فعال" aria-label="هشدار فعال"></span>' : '') +
-          '</span>' +
-          (sub ? '<span class="sub">' + esc(sub) + '</span>' : '') +
-          '<span class="radar-signals">' +
-            '<span class="radar-pill ' + finCls + '">' + esc(word) + '</span>' +
-            '<span class="radar-pill ' + rec.cls + '">' + esc(rec.text) + '</span>' +
-          '</span>' +
-          '</span>' +
-          '<span class="filler"></span>' +
-          '<span class="amount ' + color + ' radar-amount">' + amt + '</span></a>'
+          '">' +
+          '<div class="radar-card-top">' +
+            '<div class="radar-card-name">' + esc(c.name) +
+              (hasWatch ? ' <span class="radar-watch-tag">هشدار</span>' : '') +
+            '</div>' +
+            '<div class="radar-card-amt ' + color + '">' + amt + '</div>' +
+          '</div>' +
+          (sub ? '<div class="radar-card-meta">' + esc(sub) + '</div>' : '') +
+          '<div class="radar-card-signals">' +
+            '<span class="radar-sig ' + finCls + '">' + esc(word) + '</span>' +
+            '<span class="radar-sig ' + rec.cls + '">' + esc(rec.text) + '</span>' +
+          '</div></a>'
         );
       })
       .join('');
@@ -239,18 +238,20 @@
 
   function drawCustomersPage(root) {
     const chip = function (id, label) {
-      return '<button type="button" class="chip ' + (custFilter === id ? 'active' : '') + '" data-filter="' + id + '">' + label + '</button>';
+      return '<button type="button" class="seg-btn' + (custFilter === id ? ' is-active' : '') + '" data-filter="' + id + '" role="tab" aria-selected="' + (custFilter === id ? 'true' : 'false') + '">' + label + '</button>';
     };
     root.innerHTML =
-      '<h2 class="section-title">رادار مشتریان</h2>' +
-      '<div class="field"><input id="customer-search" placeholder="جستجوی نام، آدرس، تلفن، منطقه و…" value="' + esc(custQuery) + '" autocomplete="off"></div>' +
-      '<div class="chip-row" id="customer-chips">' + chip('all','همه') + chip('debt','بدهکار') + chip('settled','تسویه') + chip('credit','بستانکار') + '</div>' +
-      '<div class="btn-row" style="margin-bottom:8px;align-items:center;flex-wrap:wrap;gap:8px;">' +
-      '<button type="button" class="btn small secondary' + ((locFilter.regionId || locFilter.routeId || locFilter.neighborhoodId || locFilter.unassigned) ? ' active' : '') + '" id="customer-filter" aria-label="فیلتر موقعیت مکانی">موقعیت</button>' +
-      '<button type="button" class="btn small secondary' + (custSortByDebt ? ' active' : '') + '" id="sort-debt" aria-label="مرتب‌سازی بر اساس بدهی" title="مرتب‌سازی بر اساس بدهی">' + (custSortByDebt ? '✓ ' : '') + 'بدهی ↓</button>' +
+      '<div class="radar-head"><h2 class="radar-title">رادار مشتریان</h2></div>' +
+      '<div class="radar-search"><input id="customer-search" type="search" placeholder="جستجوی نام، تلفن، منطقه…" value="' + esc(custQuery) + '" autocomplete="off"></div>' +
+      '<div class="seg-control" id="customer-chips" role="tablist">' +
+        chip('all','همه') + chip('debt','بدهکار') + chip('settled','تسویه') + chip('credit','بستانکار') +
+      '</div>' +
+      '<div class="radar-tools">' +
+      '<button type="button" class="radar-tool' + ((locFilter.regionId || locFilter.routeId || locFilter.neighborhoodId || locFilter.unassigned) ? ' is-on' : '') + '" id="customer-filter" aria-label="فیلتر موقعیت مکانی">موقعیت</button>' +
+      '<button type="button" class="radar-tool' + (custSortByDebt ? ' is-on' : '') + '" id="sort-debt" aria-label="مرتب‌سازی بر اساس بدهی" title="مرتب‌سازی بر اساس بدهی">' + (custSortByDebt ? '✓ ' : '') + 'بدهی</button>' +
       '</div>' +
       '<div id="customer-filter-indicator" class="customer-filter-indicator" aria-live="polite"></div>' +
-      '<div id="customer-list"></div>';
+      '<div id="customer-list" class="radar-list"></div>';
 
     const searchEl = document.getElementById('customer-search');
     searchHandler = function (e) { custQuery = e.target.value; renderCustomerListOnly(); };
@@ -260,7 +261,7 @@
     document.querySelectorAll('#customer-chips [data-filter]').forEach(function (btn) {
       const fn = function () {
         custFilter = btn.getAttribute('data-filter');
-        document.querySelectorAll('#customer-chips [data-filter]').forEach(function (b) { b.classList.toggle('active', b.getAttribute('data-filter') === custFilter); });
+        document.querySelectorAll('#customer-chips [data-filter]').forEach(function (b) { var on = b.getAttribute('data-filter') === custFilter; b.classList.toggle('is-active', on); b.setAttribute('aria-selected', on ? 'true' : 'false'); });
         renderCustomerListOnly();
       };
       btn.addEventListener('click', fn); chipHandlers.push({el:btn, fn:fn});
@@ -273,7 +274,7 @@
     sortHandler = function () {
       custSortByDebt = !custSortByDebt;
       sortBtn.textContent = (custSortByDebt ? '✓ ' : '') + 'بدهی ↓';
-      sortBtn.classList.toggle('active', custSortByDebt);
+      sortBtn.classList.toggle('is-on', custSortByDebt);
       renderCustomerListOnly();
     };
     sortBtn.addEventListener('click', sortHandler);
